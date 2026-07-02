@@ -179,6 +179,10 @@ type NoticeConfig = {
   title: string;
   body: string;
   imagePath: string;
+  regBegin?: string;
+  regEnd?: string;
+  platforms?: string;
+  versions?: string;
   updatedAt?: string;
 };
 
@@ -371,6 +375,13 @@ const modules: Record<SectionKey, ModuleConfig> = {
 function toNumberArray(value?: string) {
   return String(value ?? "")
     .split(",")
+    .map((item) => Number(item.trim()))
+    .filter((item) => Number.isFinite(item));
+}
+
+function toFlexibleNumberArray(value?: string) {
+  return String(value ?? "")
+    .split(/[\s,，;；]+/)
     .map((item) => Number(item.trim()))
     .filter((item) => Number.isFinite(item));
 }
@@ -651,7 +662,7 @@ function App() {
             </section>
           )}
 
-          {active === "dashboard" ? <Dashboard results={results} accounts={accounts} /> : active === "playerInfo" ? <PlayerInfoPage postWithToken={postWithToken} /> : active === "bindUid" ? <BindUidPage postWithToken={postWithToken} /> : active === "gmState" ? <BanControlPage postWithToken={postWithToken} /> : active === "silence" ? <SilencePage operator={session.operatorAccount} /> : active.startsWith("mail") ? <MailSuitePage active={active as MailSectionKey} postWithToken={postWithToken} setActive={setActive} /> : active.startsWith("gift") ? <GiftSuitePage active={active as GiftSectionKey} postWithToken={postWithToken} /> : active === "notice" ? <NoticePage /> : active === "serverTime" ? <OpenServerPage postWithToken={postWithToken} /> : moduleConfig.status === "pending" ? <UnavailablePanel module={moduleConfig} /> : (
+          {active === "dashboard" ? <Dashboard results={results} accounts={accounts} /> : active === "playerInfo" ? <PlayerInfoPage postWithToken={postWithToken} /> : active === "bindUid" ? <BindUidPage postWithToken={postWithToken} /> : active === "gmState" ? <BanControlPage postWithToken={postWithToken} /> : active === "silence" ? <SilencePage operator={session.operatorAccount} /> : active.startsWith("mail") ? <MailSuitePage active={active as MailSectionKey} postWithToken={postWithToken} setActive={setActive} /> : active.startsWith("gift") ? <GiftSuitePage active={active as GiftSectionKey} postWithToken={postWithToken} /> : active === "notice" ? <NoticePage postWithToken={postWithToken} /> : active === "serverTime" ? <OpenServerPage postWithToken={postWithToken} /> : moduleConfig.status === "pending" ? <UnavailablePanel module={moduleConfig} /> : (
             <>
               <section className="filter-panel">
                 <div className="panel-heading">
@@ -1432,7 +1443,7 @@ function MailListPage({ active, mailRows, onCreate, onDelete, onRefresh, recordT
               过期时间: formatTimestamp(row.Et),
               创建时间: "暂无数据",
               操作者: "创建：GM",
-              操作: <div className="mail-action-buttons"><button type="button">编辑</button><button onClick={() => void onDelete(id)} type="button">删除</button></div>,
+              操作: <div className="mail-action-buttons"><button type="button">编辑</button><button onClick={() => void onDelete(id)} type="button">撤回</button></div>,
             };
           })}
         />
@@ -1465,6 +1476,11 @@ function MailEditor({ global, items, onBack, onSubmit, onUploadItemTable, reward
   const [startTime, setStartTime] = React.useState(toDatetimeLocal(now));
   const [endTime, setEndTime] = React.useState(toDatetimeLocal(later));
   const [testUser, setTestUser] = React.useState("");
+  const [versionFilter, setVersionFilter] = React.useState("");
+  const [platformFilter, setPlatformFilter] = React.useState("all");
+  const [regBegin, setRegBegin] = React.useState("");
+  const [regEnd, setRegEnd] = React.useState("");
+  const [serverFilter, setServerFilter] = React.useState("");
   const [error, setError] = React.useState("");
   const [submitting, setSubmitting] = React.useState(false);
   const isGlobalMail = mailType === "global";
@@ -1504,14 +1520,26 @@ function MailEditor({ global, items, onBack, onSubmit, onUploadItemTable, reward
       const itemId = Number(reward.itemId);
       return Number.isFinite(itemId) && itemId > 0 ? [itemId] : [];
     });
+    const versionList = toFlexibleNumberArray(versionFilter);
+    const platformList = platformFilter === "all" ? [] : [Number(platformFilter)];
+    const regBeginSeconds = regBegin ? parseDatetimeLocalSeconds(regBegin) : 0;
+    const regEndSeconds = regEnd ? parseDatetimeLocalSeconds(regEnd) : 0;
+    if ((regBegin && !regBeginSeconds) || (regEnd && !regEndSeconds)) {
+      setError("请选择有效的注册时间区间");
+      return;
+    }
+    if (regBeginSeconds && regEndSeconds && regEndSeconds <= regBeginSeconds) {
+      setError("注册结束时间必须晚于注册开始时间");
+      return;
+    }
     setError("");
     setSubmitting(true);
     try {
       await onSubmit({
         Typ: isGlobalMail ? 2 : 1,
         TargetID: targets,
-        RegtBegin: 0,
-        Regt: 0,
+        RegtBegin: regBeginSeconds,
+        Regt: regEndSeconds,
         Et: endSeconds,
         St: 0,
         SenderName: "GM",
@@ -1520,8 +1548,8 @@ function MailEditor({ global, items, onBack, onSubmit, onUploadItemTable, reward
         BodyData: [],
         BodyData2: [],
         ItemLst: itemList,
-        Platform: [],
-        Version: [],
+        Platform: platformList,
+        Version: versionList,
       });
       setError("保存成功，正在返回列表...");
     } catch (submitError) {
@@ -1540,6 +1568,13 @@ function MailEditor({ global, items, onBack, onSubmit, onUploadItemTable, reward
           <label className="mail-form-row"><span>邮件模板</span><select value={templateId} onChange={(event) => setTemplateId(event.target.value)}><option value="">请选择</option>{templates.map((template) => <option key={template.id} value={template.id}>{template.name}</option>)}</select></label>
           <div className="mail-form-row mail-radio-row"><span>奖励方式</span><RadioPill checked={rewardMode === "custom"} label="自定义" onChange={() => setRewardMode("custom")} /><RadioPill checked={rewardMode === "internal"} label="内购" onChange={() => setRewardMode("internal")} /><RadioPill checked={rewardMode === "template"} label="奖励模板" onChange={() => setRewardMode("template")} /><RadioPill checked={rewardMode === "none"} label="无奖励" onChange={() => setRewardMode("none")} /></div>
           {isGlobalMail && <div className="mail-form-row"><span>Filter</span><button className="mail-small-button" type="button">+ Add</button></div>}
+          <div className="mail-filter-grid">
+            <label><span>客户端版本</span><input value={versionFilter} onChange={(event) => setVersionFilter(event.target.value)} placeholder="例如 10800,1080001；留空全部" /></label>
+            <label><span>系统</span><select value={platformFilter} onChange={(event) => setPlatformFilter(event.target.value)}><option value="all">全部</option><option value="1">iOS</option><option value="2">Android</option></select></label>
+            <label><span>注册开始</span><input type="datetime-local" value={regBegin} onChange={(event) => setRegBegin(event.target.value)} /></label>
+            <label><span>注册结束</span><input type="datetime-local" value={regEnd} onChange={(event) => setRegEnd(event.target.value)} /></label>
+            <label><span>特定区服</span><input disabled value={serverFilter} onChange={(event) => setServerFilter(event.target.value)} placeholder="当前入口已绑定所选区服" /></label>
+          </div>
           {rewardMode === "template" && <label className="mail-form-row"><span>奖励模板</span><select value={rewardTemplateId} onChange={(event) => setRewardTemplateId(event.target.value)}><option value="">请选择</option>{rewardTemplates.map((template) => <option key={template.id} value={template.id}>{template.title}</option>)}</select></label>}
           {rewardMode === "custom" && <RewardRows items={items} onUploadItemTable={onUploadItemTable} rewards={rewards} setRewards={setRewards} />}
           {!isGlobalMail && <label className="mail-form-row mail-textarea-row"><span>用户 ID</span><textarea value={targetIds} onChange={(event) => setTargetIds(event.target.value)} /></label>}
@@ -1817,6 +1852,11 @@ function formatTimestamp(value: unknown) {
   return new Date(number * 1000).toISOString().slice(0, 16).replace("T", " ");
 }
 
+function secondsToDatetimeLocal(value: unknown) {
+  const number = Number(value);
+  return Number.isFinite(number) && number > 0 ? toDatetimeLocal(new Date(number * 1000)) : "";
+}
+
 function ActionCard({ action, isLoading, onSubmit }: { action: ApiAction; isLoading: boolean; onSubmit: (values: Record<string, string>) => void }) {
   const [values, setValues] = React.useState<Record<string, string>>({});
   return (
@@ -1848,17 +1888,23 @@ function UnavailablePanel({ module }: { module: ModuleConfig }) {
   return <section className="unavailable-panel"><module.icon size={34} /><strong>{module.title}暂未开放</strong><p>{module.description}</p></section>;
 }
 
-function NoticePage() {
+function NoticePage({ postWithToken }: { postWithToken: (endpoint: string, body: unknown) => Promise<ApiPostResponse> }) {
   const [notices, setNotices] = React.useState<NoticeConfig[]>([]);
   const [editing, setEditing] = React.useState<NoticeConfig | null>(null);
-  const [form, setForm] = React.useState<NoticeConfig>({ slot: 1, title: "", body: "", imagePath: "" });
+  const [form, setForm] = React.useState<NoticeConfig>({ slot: 1, title: "", body: "", imagePath: "", regBegin: "", regEnd: "", platforms: "", versions: "" });
+  const [status, setStatus] = React.useState("");
   const palettes = ["blue", "green", "orange"];
 
   const refresh = React.useCallback(async () => {
-    const response = await fetch("/local-api/notices");
-    const payload = (await response.json().catch(() => ({}))) as { notices?: NoticeConfig[] };
-    setNotices(payload.notices ?? [1, 2, 3].map((slot) => ({ slot, title: "", body: "", imagePath: "" })));
-  }, []);
+    const result = await postWithToken("/gmNoticeLst", {});
+    const error = apiBusinessError(result);
+    if (error) {
+      setStatus(`公告读取失败：${error}`);
+      setNotices([1, 2, 3].map((slot) => ({ slot, title: "", body: "", imagePath: "" })));
+      return;
+    }
+    setNotices(noticePayloadToConfigs(getApiData(result.payload)));
+  }, [postWithToken]);
 
   React.useEffect(() => {
     void refresh();
@@ -1867,11 +1913,21 @@ function NoticePage() {
   const openEditor = (notice?: NoticeConfig) => {
     const next = notice ?? notices[0] ?? { slot: 1, title: "", body: "", imagePath: "" };
     setEditing(next);
-    setForm({ slot: next.slot, title: next.title ?? "", body: next.body ?? "", imagePath: next.imagePath ?? "" });
+    setForm({ slot: next.slot, title: next.title ?? "", body: next.body ?? "", imagePath: next.imagePath ?? "", regBegin: next.regBegin ?? "", regEnd: next.regEnd ?? "", platforms: next.platforms ?? "", versions: next.versions ?? "" });
   };
 
   const save = async () => {
-    await fetch("/local-api/notices", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(form) });
+    const merged = [1, 2, 3].map((slot) => {
+      const current = notices.find((notice) => Number(notice.slot) === slot) ?? { slot, title: "", body: "", imagePath: "" };
+      return slot === form.slot ? form : current;
+    });
+    const result = await postWithToken("/gmNoticeAdd", configsToNoticePayload(merged));
+    const error = apiBusinessError(result);
+    if (error) {
+      setStatus(`公告保存失败：${error}`);
+      return;
+    }
+    setStatus("公告已保存到服务器");
     setEditing(null);
     await refresh();
   };
@@ -1891,10 +1947,12 @@ function NoticePage() {
               <div className="notice-body-box">{notice.body || "暂无公告内容"}</div>
               <label>配图路径</label>
               <div className="notice-image-path">{notice.imagePath || "未配置配图路径"}</div>
+              <div className="tag-row">{notice.platforms && <small>系统：{notice.platforms}</small>}{notice.versions && <small>版本：{notice.versions}</small>}</div>
             </button>
           );
         })}
       </div>
+      {status && <div className="mail-status">{status}</div>}
       {editing && (
         <div className="modal-backdrop" role="presentation">
           <section className="notice-modal" role="dialog" aria-modal="true">
@@ -1904,6 +1962,10 @@ function NoticePage() {
               <label>公告标题<input value={form.title} onChange={(event) => setForm({ ...form, title: event.target.value })} placeholder="请输入公告标题" /></label>
               <label>公告内容<textarea value={form.body} onChange={(event) => setForm({ ...form, body: event.target.value })} placeholder="请输入公告内容" /></label>
               <label>配图路径<input value={form.imagePath} onChange={(event) => setForm({ ...form, imagePath: event.target.value })} placeholder="例如：/notice/banner_1.png" /></label>
+              <label>注册开始<input type="datetime-local" value={form.regBegin ?? ""} onChange={(event) => setForm({ ...form, regBegin: event.target.value })} /></label>
+              <label>注册结束<input type="datetime-local" value={form.regEnd ?? ""} onChange={(event) => setForm({ ...form, regEnd: event.target.value })} /></label>
+              <label>系统筛选<input value={form.platforms ?? ""} onChange={(event) => setForm({ ...form, platforms: event.target.value })} placeholder="1=iOS，2=Android；留空全部" /></label>
+              <label>版本筛选<input value={form.versions ?? ""} onChange={(event) => setForm({ ...form, versions: event.target.value })} placeholder="例如 10800,1080001；留空全部" /></label>
               <footer><button onClick={() => void save()} type="button">保存</button><button onClick={() => setEditing(null)} type="button">取消</button></footer>
             </div>
           </section>
@@ -1911,6 +1973,42 @@ function NoticePage() {
       )}
     </section>
   );
+}
+
+function noticePayloadToConfigs(data: Record<string, unknown> | null): NoticeConfig[] {
+  return [1, 2, 3].map((slot) => {
+    const suffix = slot === 1 ? "" : String(slot);
+    const platform = data?.[`Platform${slot}`];
+    const version = data?.[`Version${slot}`];
+    return {
+      slot,
+      title: String(data?.[`Titel${suffix}`] ?? ""),
+      body: String(data?.[`Body${suffix}`] ?? ""),
+      imagePath: String(data?.[`Rs${slot}`] ?? ""),
+      regBegin: secondsToDatetimeLocal(data?.[`RegtBegin${slot}`]),
+      regEnd: secondsToDatetimeLocal(data?.[`RegtEnd${slot}`]),
+      platforms: Array.isArray(platform) ? platform.join(",") : "",
+      versions: Array.isArray(version) ? version.join(",") : "",
+    };
+  });
+}
+
+function configsToNoticePayload(configs: NoticeConfig[]) {
+  const payload: Record<string, unknown> = {};
+  for (const config of configs) {
+    const slot = Number(config.slot);
+    const suffix = slot === 1 ? "" : String(slot);
+    payload[`Titel${suffix}`] = config.title ?? "";
+    payload[`Body${suffix}`] = config.body ?? "";
+    payload[`Rs${slot}`] = config.imagePath ?? "";
+    payload[`RegtBegin${slot}`] = config.regBegin ? parseDatetimeLocalSeconds(config.regBegin) : 0;
+    payload[`RegtEnd${slot}`] = config.regEnd ? parseDatetimeLocalSeconds(config.regEnd) : 0;
+    const platforms = toFlexibleNumberArray(config.platforms);
+    const versions = toFlexibleNumberArray(config.versions);
+    payload[`Platform${slot}`] = platforms.length ? platforms : null;
+    payload[`Version${slot}`] = versions.length ? versions : null;
+  }
+  return payload;
 }
 
 function AccountPanel({ accounts, games, session, onAdd, onDelete, onClose }: { accounts: ManagedAccount[]; games: GameConfig[]; session: Session; onAdd: (account: ManagedAccount) => Promise<void>; onDelete: (accountId: number) => Promise<void>; onClose: () => void }) {
