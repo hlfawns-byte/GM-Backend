@@ -2036,15 +2036,18 @@ function configsToNoticePayload(configs: NoticeConfig[]) {
 }
 
 function AccountPanel({ accounts, canManageAdmins, games, session, onAdd, onDelete, onClose }: { accounts: ManagedAccount[]; canManageAdmins: boolean; games: GameConfig[]; session: Session; onAdd: (account: ManagedAccount) => Promise<void>; onDelete: (accountId: number) => Promise<void>; onClose: () => void }) {
-  const [form, setForm] = React.useState({ account: "", password: "", displayName: "", role: "运营", game: `${session.game}/${session.serverName}`, permissions: ["用户查询", "日志审计"], isManager: false });
+  const currentGameKey = `${session.game}/${session.serverName}`;
+  const [form, setForm] = React.useState({ account: "", password: "", displayName: "", role: "运营", gameKeys: [currentGameKey], permissions: ["用户查询", "日志审计"], isManager: false });
   const [formError, setFormError] = React.useState("");
-  const togglePermission = (permission: string) => setForm((current) => ({ ...current, permissions: current.permissions.includes(permission) ? current.permissions.filter((item) => item !== permission) : [...current.permissions, permission] }));
+  const gameOptions = React.useMemo(() => games.map((game) => ({ label: `${game.name} / ${game.serverName}`, value: `${game.name}/${game.serverName}` })), [games]);
 
   React.useEffect(() => {
-    if (!games.some((game) => `${game.name}/${game.serverName}` === form.game) && games[0]) {
-      setForm((current) => ({ ...current, game: `${games[0].name}/${games[0].serverName}` }));
+    const available = new Set(gameOptions.map((game) => game.value));
+    const filtered = form.gameKeys.filter((game) => available.has(game));
+    if (filtered.length !== form.gameKeys.length || (!filtered.length && gameOptions[0])) {
+      setForm((current) => ({ ...current, gameKeys: filtered.length ? filtered : gameOptions[0] ? [gameOptions[0].value] : [] }));
     }
-  }, [form.game, games]);
+  }, [form.gameKeys, gameOptions]);
 
   return (
     <div className="modal-backdrop" role="presentation">
@@ -2055,8 +2058,8 @@ function AccountPanel({ accounts, canManageAdmins, games, session, onAdd, onDele
             event.preventDefault();
             try {
               setFormError("");
-              await onAdd({ id: Date.now(), account: form.account, password: form.password, displayName: form.displayName || form.account, role: form.role, games: form.isManager ? games.map((game) => `${game.name}/${game.serverName}`) : [form.game], permissions: form.permissions, isManager: canManageAdmins && form.isManager, status: "启用" });
-              setForm((current) => ({ ...current, account: "", password: "", displayName: "", isManager: false }));
+              await onAdd({ id: Date.now(), account: form.account, password: form.password, displayName: form.displayName || form.account, role: form.role, games: form.isManager ? gameOptions.map((game) => game.value) : form.gameKeys, permissions: form.permissions, isManager: canManageAdmins && form.isManager, status: "启用" });
+              setForm((current) => ({ ...current, account: "", password: "", displayName: "", gameKeys: [currentGameKey], isManager: false }));
             } catch (error) {
               setFormError(error instanceof Error ? error.message : "创建账号失败");
             }
@@ -2065,9 +2068,9 @@ function AccountPanel({ accounts, canManageAdmins, games, session, onAdd, onDele
             <label>登录密码<input type="password" value={form.password} onChange={(event) => setForm({ ...form, password: event.target.value })} placeholder="成员密码" /></label>
             <label>显示名称<input value={form.displayName} onChange={(event) => setForm({ ...form, displayName: event.target.value })} placeholder="成员姓名" /></label>
             <label>角色<select value={form.role} onChange={(event) => setForm({ ...form, role: event.target.value })}><option>策划</option><option>程序</option><option>测试</option><option>运营</option></select></label>
-            <label>游戏权限<select value={form.game} onChange={(event) => setForm({ ...form, game: event.target.value })}>{games.map((game) => <option key={`${game.name}/${game.serverName}`} value={`${game.name}/${game.serverName}`}>{game.name} / {game.serverName}</option>)}</select></label>
+            <label>游戏权限<MultiSelectDropdown options={gameOptions} values={form.gameKeys} onChange={(gameKeys) => setForm({ ...form, gameKeys })} placeholder="请选择游戏区服" /></label>
             {canManageAdmins && <label className="permission-check admin-toggle"><input checked={form.isManager} onChange={(event) => setForm({ ...form, isManager: event.target.checked })} type="checkbox" />设为后台管理员</label>}
-            <div className="permission-box"><div>功能权限</div>{permissionOptions.map((item) => <label className="permission-check" key={item}><input checked={form.permissions.includes(item)} onChange={() => togglePermission(item)} type="checkbox" />{item}</label>)}</div>
+            <label>功能权限<MultiSelectDropdown options={permissionOptions.map((item) => ({ label: item, value: item }))} values={form.permissions} onChange={(permissions) => setForm({ ...form, permissions })} placeholder="请选择功能权限" /></label>
             <button className="primary-button" type="submit"><Plus size={15} />创建账号</button>
             {formError && <div className="form-error">{formError}</div>}
           </form>
@@ -2080,6 +2083,33 @@ function AccountPanel({ accounts, canManageAdmins, games, session, onAdd, onDele
           ))}</div>
         </div>
       </section>
+    </div>
+  );
+}
+
+function MultiSelectDropdown({ onChange, options, placeholder, values }: { onChange: (values: string[]) => void; options: Array<{ label: string; value: string }>; placeholder: string; values: string[] }) {
+  const [open, setOpen] = React.useState(false);
+  const selected = options.filter((option) => values.includes(option.value));
+  const toggle = (value: string) => {
+    onChange(values.includes(value) ? values.filter((item) => item !== value) : [...values, value]);
+  };
+
+  return (
+    <div className="multi-select">
+      <button className="multi-select-trigger" onClick={() => setOpen((current) => !current)} type="button">
+        <span>{selected.length ? selected.map((option) => option.label).join("、") : placeholder}</span>
+        <ChevronDown size={15} />
+      </button>
+      {open && (
+        <div className="multi-select-menu">
+          {options.map((option) => (
+            <label className="multi-select-option" key={option.value}>
+              <input checked={values.includes(option.value)} onChange={() => toggle(option.value)} type="checkbox" />
+              {option.label}
+            </label>
+          ))}
+        </div>
+      )}
     </div>
   );
 }
