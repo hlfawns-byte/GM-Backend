@@ -1506,7 +1506,6 @@ function MailEditor({ global, items, onBack, onSubmit, onUploadItemTable, reward
       ItemLst: itemList,
       Platform: [],
       Version: [],
-      TestUser: testUser,
     });
   };
 
@@ -1522,7 +1521,7 @@ function MailEditor({ global, items, onBack, onSubmit, onUploadItemTable, reward
           {rewardMode === "template" && <label className="mail-form-row"><span>奖励模板</span><select value={rewardTemplateId} onChange={(event) => setRewardTemplateId(event.target.value)}><option value="">请选择</option>{rewardTemplates.map((template) => <option key={template.id} value={template.id}>{template.title}</option>)}</select></label>}
           {rewardMode === "custom" && <RewardRows items={items} onUploadItemTable={onUploadItemTable} rewards={rewards} setRewards={setRewards} />}
           {!global && <label className="mail-form-row mail-textarea-row"><span>用户 ID</span><textarea value={targetIds} onChange={(event) => setTargetIds(event.target.value)} /></label>}
-          {global && <><label className="mail-form-row"><span>测试用户</span><input value={testUser} onChange={(event) => setTestUser(event.target.value)} /></label><small className="mail-form-hint">只支持一个测试用户</small></>}
+          {global && <><label className="mail-form-row"><span>测试用户</span><input disabled value={testUser} onChange={(event) => setTestUser(event.target.value)} placeholder="当前接口暂不支持" /></label><small className="mail-form-hint">当前服务器接口暂不支持添加测试用户</small></>}
           <label className="mail-form-row"><span>邮件标题</span><input value={title} onChange={(event) => setTitle(event.target.value)} /></label>
           <label className="mail-form-row mail-textarea-row"><span>邮件内容</span><textarea value={body} onChange={(event) => setBody(event.target.value)} /></label>
           <label className="mail-form-row"><span>生效时间</span><input type="datetime-local" value={startTime} onChange={(event) => setStartTime(event.target.value)} /><em>UTC {formatUtc(startTime)}</em></label>
