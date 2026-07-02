@@ -1317,7 +1317,6 @@ function MailSuitePage({ active, postWithToken, setActive }: { active: MailSecti
 
   React.useEffect(() => {
     setView("list");
-    setStatus("");
   }, [active]);
 
   const uploadItemTable = async (file: File) => {
@@ -1354,13 +1353,21 @@ function MailSuitePage({ active, postWithToken, setActive }: { active: MailSecti
           const result = await postWithToken("/gmMailAdd", body);
           const error = apiBusinessError(result);
           if (error) {
-            setStatus(`邮件提交失败：${error}`);
-            return;
+            throw new Error(`邮件提交失败：${error}`);
           }
           const data = getApiData(result.payload);
-          setStatus(`邮件已提交到服务器${data?.Id ? `，ID：${String(data.Id)}` : ""}`);
+          const message = `邮件已提交到服务器${data?.Id ? `，ID：${String(data.Id)}` : ""}`;
+          setStatus(message);
+          const submittedTyp = Number(getObject(body)?.Typ);
           setView("list");
           await refreshMailList();
+          if (submittedTyp === 2 && active !== "mailGlobal") {
+            setActive("mailGlobal");
+          } else if (submittedTyp === 1 && active !== "mailPersonal") {
+            setActive("mailPersonal");
+          }
+          setStatus(message);
+          return message;
         }}
         onUploadItemTable={uploadItemTable}
       />
@@ -1444,7 +1451,7 @@ function MailDataTable({ columns, rows }: { columns: string[]; rows: Array<Recor
   );
 }
 
-function MailEditor({ global, items, onBack, onSubmit, onUploadItemTable, rewardTemplates, templates }: { global: boolean; items: ItemOption[]; onBack: () => void; onSubmit: (body: unknown) => Promise<void>; onUploadItemTable: (file: File) => Promise<void>; rewardTemplates: RewardTemplate[]; templates: MailTemplate[] }) {
+function MailEditor({ global, items, onBack, onSubmit, onUploadItemTable, rewardTemplates, templates }: { global: boolean; items: ItemOption[]; onBack: () => void; onSubmit: (body: unknown) => Promise<string | void>; onUploadItemTable: (file: File) => Promise<void>; rewardTemplates: RewardTemplate[]; templates: MailTemplate[] }) {
   const now = new Date();
   const later = new Date(now.getTime() + 14 * 24 * 60 * 60 * 1000);
   const [mailType, setMailType] = React.useState(global ? "global" : "personal");
@@ -1511,6 +1518,7 @@ function MailEditor({ global, items, onBack, onSubmit, onUploadItemTable, reward
         Platform: [],
         Version: [],
       });
+      setError("保存成功，正在返回列表...");
     } catch (submitError) {
       setError(submitError instanceof Error ? submitError.message : "保存失败");
     } finally {
