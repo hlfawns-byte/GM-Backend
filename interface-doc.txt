@@ -1,0 +1,658 @@
+后台接口说明
+1. 测试服连接地址： http://47.94.97.41:10004
+2. 登陆 http://localhost:8082/login
+{
+    "Acc": "admin",
+    "Pwd": "admin123"
+}
+返回
+{"code":200,"data":{"Result":0,"Acc":"admin","Pwd":"admin123"}}
+"Result"为0表示成功，1表示失败
+注意成功时，Headers里面会有Token，记录下其值，后面要用到。
+失败时，会返回失败原因
+3. 增加玩家白名单、黑名单 http://localhost:8082/gmStateAdd
+{
+    "UserId": 20190332,
+    "State": 1
+}
+"State"为1表示免广告白名单，为2表示黑名单，不让登陆游戏，为0表示清除名单功能
+类型1 白名单用户，从排行榜移除
+类型2 黑名单用户，从排行榜移除
+类型3 白名单用户，不从排行榜移除
+4黑名单，不让登陆，并根据uid封账号，从排行榜移除，此时的返回值的UserId，会包括账号下的所有角色的uid，这些查到的所有角色的uid，都会标识State为4
+注意Header里面添加Token，Token在非活动状态下，有效时间为十分钟，超时需重新登陆。
+4. 查看白名单清单http://localhost:8082/gmStateLst
+5. 状态码意义列表http://localhost:8082/gmStateInfo
+输入：
+{
+}
+输出：
+{
+    "code": 200,
+    "data": {
+        "Lst": [
+            {
+                "Id": 1,
+                "Info": "1 白名单用户，从排行榜移除"
+            },
+            {
+                "Id": 2,
+                "Info": "2 黑名单用户，从排行榜移除"
+            },
+            {
+                "Id": 3,
+                "Info": "3 白名单用户，不从排行榜移除"
+            },
+            {
+                "Id": 4,
+                "Info": "4 黑名单，并根据uid封账号，从排行榜移除"
+            }
+        ]
+    }
+}
+6. 邮件 http://localhost:8082/gmMailAdd
+输入：
+{
+    "Typ": 1,
+    "TargetID": [20190332, 20190333],
+    "RegtBegin": 0,
+    "Regt": 0,
+    "Et": 1888888888,
+    "St": 0,
+    "SenderName": "test_1",
+    "Titel": "111",
+    "Body": "22222",
+    "BodyData": [11, 22],
+    "BodyData2": ["12", "23"],
+    "ItemLst": [101, 200],
+    "Platform": [1, 2],
+    "Version": [10800, 1080001]
+}
+参数说明
+输出：
+{
+    "code": 200,
+    "data": {
+        "Result": 0,
+        "Id": "1782198525853308419",
+        "Typ": 1,
+        "RegtBegin": 0,
+        "RegtEnd": 0,
+        "Et": 1888888888,
+        "St": 0,
+        "SenderName": "test_1",
+        "Titel": "111",
+        "Body": "22222",
+        "TargetID": [
+            20190332,
+            20190333
+        ],
+        "BodyData": [
+            11,
+            22
+        ],
+        "BodyData2": [
+            "12",
+            "23"
+        ],
+        "ItemLst": [
+            101,
+            200
+        ],
+        "Platform": [
+            1,
+            2
+        ],
+        "Version": [
+            10800,
+            1080001
+        ]
+    }
+}
+用于转换UTC时间的网页：https://tool.chinaz.com/Tools/unixtime.aspx
+7. 邮件清单http://localhost:8082/gmMailLst
+输入：
+{
+}
+输出：
+{
+    "code": 200,
+    "data": {
+        "Lst": [
+            {
+                "Result": 0,
+                "Id": "1782198525853308419",
+                "Typ": 1,
+                "RegtBegin": 0,
+                "RegtEnd": 0,
+                "Et": 1888888888,
+                "St": 0,
+                "SenderName": "test_1",
+                "Titel": "111",
+                "Body": "22222",
+                "TargetID": [
+                    20190332,
+                    20190333
+                ],
+                "BodyData": [
+                    11,
+                    22
+                ],
+                "BodyData2": [
+                    "12",
+                    "23"
+                ],
+                "ItemLst": [
+                    101,
+                    200
+                ],
+                "Platform": [
+                    1,
+                    2
+                ],
+                "Version": [
+                    10800,
+                    1080001
+                ]
+            }
+        ]
+    }
+}
+8. 删除邮件http://localhost:8082/gmMailDel
+输入：
+{
+    "Id": 1712816468520281011    
+}
+输出：
+{
+    "code": 200,
+    "data": {
+        "Result": 0,
+        "Id": 1712816468520281011
+    }
+}
+9. 添加兑换码http://localhost:8082/gmGiftAdd
+输入：
+{
+    "Id": ["111", "222"],
+    "Type": 0,
+    "Group": 110,
+    "Num": 100,
+    "Et": 1713196740,
+    "ItemLst": [101, 5],
+    "Desc": "达人通用兑换码"
+}
+参数说明：
+输出：
+{
+    "code": 200,
+    "data": {
+        "Result": 0,
+        "Id": [
+            "111",
+            "222"
+        ],
+        "Type": 0,
+        "Group": 110,
+        "Num": 100,
+        "Et": 1713196740,
+        "ItemLst": [
+            101,
+            5
+        ],
+        "Desc": "达人通用兑换码"
+    }
+}
+8. 获取兑换码清单http://localhost:8082/gmGiftLst
+输入：
+{
+}
+输出：
+{
+    "code": 200,
+    "data": {
+        "Result": 0,
+        "Lst": [
+            {
+                "Id": "vip888",
+                "Type": 1,
+                "Group": 111,
+                "Num": 99,
+                "Et": 1711792800,
+                "ItemLst": [
+                    101,
+                    200
+                ],
+                "Desc": ""
+            },
+            {
+                "Id": "sf001",
+                "Type": 0,
+                "Group": 110,
+                "Num": 100,
+                "Et": 1713196740,
+                "ItemLst": [
+                    102,
+                    5
+                ],
+                "Desc": ""
+            },
+            {
+                "Id": "111",
+                "Type": 0,
+                "Group": 110,
+                "Num": 100,
+                "Et": 1713196740,
+                "ItemLst": [
+                    101,
+                    5
+                ],
+                "Desc": ""
+            },
+            {
+                "Id": "222",
+                "Type": 0,
+                "Group": 110,
+                "Num": 100,
+                "Et": 1713196740,
+                "ItemLst": [
+                    101,
+                    5
+                ],
+                "Desc": ""
+            },
+            {
+                "Id": "vip88",
+                "Type": 0,
+                "Group": 112,
+                "Num": 99,
+                "Et": 1711792800,
+                "ItemLst": [
+                    101,
+                    200
+                ],
+                "Desc": ""
+            }
+        ]
+    }
+}
+9. 删除兑换码 http://localhost:8082/gmGiftDel
+输入：
+{
+    "Id": "VIP888"
+}
+输出：
+{
+    "code": 200,
+    "data": {
+        "Result": 0,
+        "Id": "VIP888"
+    }
+}
+10. 添加、修改公告
+输入：
+{
+    "Titel": "111",
+    "Body": "22222\n    hhhh,\n    66666",
+    "RegtBegin1": 0,
+    "RegtEnd1": 1888888888,
+    "Platform1": [1, 2],
+    "Version1": [10800, 1080001],
+    "Rs1": "1.jpg",
+    "Titel2": "33",
+    "Body2": "444\n    hhhh,\n    66666",
+    "Rs2": "2.jpg",
+    "Titel3": "55",
+    "Body3": "555\n    hhhh,\n    66666",
+    "Rs3": "3.jpg"
+}
+参数说明：
+Titel公告标题，Body公告内容，里面“\n”表示换行，Rs1公告配图的路径
+输出：
+{
+    "code": 200,
+    "data": {
+        "Result": 0,
+        "Titel": "111",
+        "Body": "22222\n    hhhh,\n    66666",
+        "Titel2": "33",
+        "Body2": "444\n    hhhh,\n    66666",
+        "Titel3": "55",
+        "Body3": "555\n    hhhh,\n    66666",
+        "Rs1": "1.jpg",
+        "Rs2": "2.jpg",
+        "Rs3": "3.jpg",
+        "RegtBegin1": 0,
+        "RegtEnd1": 1888888888,
+        "Platform1": [
+            1,
+            2
+        ],
+        "Version1": [
+            10800,
+            1080001
+        ],
+        "RegtBegin2": 0,
+        "RegtEnd2": 0,
+        "Platform2": null,
+        "Version2": null,
+        "RegtBegin3": 0,
+        "RegtEnd3": 0,
+        "Platform3": null,
+        "Version3": null
+    }
+}
+11. 获得当前公告
+输入：
+{
+}
+输出：
+{
+    "code": 200,
+    "data": {
+        "Result": 0,
+        "Titel": "111",
+        "Body": "22222\n    hhhh,\n    66666",
+        "Titel2": "33",
+        "Body2": "444\n    hhhh,\n    66666",
+        "Titel3": "55",
+        "Body3": "555\n    hhhh,\n    66666",
+        "Rs1": "1.jpg",
+        "Rs2": "2.jpg",
+        "Rs3": "3.jpg",
+        "RegtBegin1": 0,
+        "RegtEnd1": 1888888888,
+        "Platform1": [
+            1,
+            2
+        ],
+        "Version1": [
+            10800,
+            1080001
+        ],
+        "RegtBegin2": 0,
+        "RegtEnd2": 0,
+        "Platform2": null,
+        "Version2": null,
+        "RegtBegin3": 0,
+        "RegtEnd3": 0,
+        "Platform3": null,
+        "Version3": null
+    }
+}
+12. 添加、更新冲刺活动信息http://localhost:8082/gmSprintAddLst
+输入：
+{
+  "Lst" : [ {
+    "SvrId" : 1,
+    "Typ" : 1,
+    "TimeBegin" : 1737371355,
+    "TimeEnd" : 1737544155
+  }, {
+    "SvrId" : 1,
+    "Typ" : 2,
+    "TimeBegin" : 1737371355,
+    "TimeEnd" : 1737544155
+  } ]
+}
+输出：
+{
+    "code": 200,
+    "data": {
+        "Result": 0,
+        "SvrTime": 1737285351,
+        "Lst": [
+            {
+                "SvrId": 1,
+                "Typ": 1,
+                "TimeBegin": 1737371355,
+                "TimeEnd": 1737544155
+            },
+            {
+                "SvrId": 1,
+                "Typ": 2,
+                "TimeBegin": 1737371355,
+                "TimeEnd": 1737544155
+            }
+        ]
+    }
+}
+格式说明：
+type CMD_SprintOne struct {
+    SvrId     uint32 // 游戏服务器ID
+    Typ       uint32 // 1关卡冲刺（通关章节） 2宠物冲刺（抽取宠物） 3培育冲刺(消耗灵石)
+    TimeBegin uint32 // 本次活动开始utc时间秒
+    TimeEnd   uint32 // 本次活动结束utc时间秒
+}
+type CMD_HZ_GM_SprintAddLst struct {
+    Lst []*CMD_SprintOne // 活动列表
+}
+type CMD_ZH_GM_SprintAddLst struct {
+    Result  uint32           // 返回信息0成功1失败
+    SvrTime uint32           // 当前服务器时间UTC秒
+    Lst     []*CMD_SprintOne // 活动列表
+}
+13. 获取冲刺活动信息列表http://localhost:8082/gmSprintLst
+输入：
+{
+}
+输出：
+{
+    "code": 200,
+    "data": {
+        "Result": 0,
+        "SvrTime": 1737285499,
+        "Lst": [
+            {
+                "SvrId": 1,
+                "Typ": 1,
+                "TimeBegin": 1737371355,
+                "TimeEnd": 1737544155
+            },
+            {
+                "SvrId": 1,
+                "Typ": 2,
+                "TimeBegin": 1737371355,
+                "TimeEnd": 1737544155
+            }
+        ]
+    }
+}
+14. 获取玩家信息，通过游戏服发送飞书信息http://localhost:8082/gmPlayerInfo
+输入：
+{
+  "Typ" : 1,
+  "UserId" : [ 20190333 ]
+}
+输出：
+{
+    "code": 200,
+    "data": {
+        "Result": 0,
+        "Typ": 1,
+        "UserId": [
+            20190333
+        ],
+        "Desc": "在最近36小时内登录用户中未找到UserId[20190333]，"
+    }
+}
+15. 设置指定账号、游戏服id的uid http://localhost:8082/gmSetAcountUid
+输入：
+{
+  "SvrId" : 1,
+  "UidSrc" : 20190333,
+  "UidDst" : 20190332,
+  "AccId" : "test01"
+}
+输出：
+{
+    "code": 200,
+    "data": {
+        "Result": 0,
+        "Lst": [
+            {
+                "uid": 20190332,
+                "sid": 1,
+                "mapid": 9001000,
+                "head": 1001,
+                "headurl": "",
+                "nickname": ""
+            }
+        ]
+    }
+}
+16. 通过玩家的uid查玩家账号 http://localhost:8082/gmGetAcountByUid
+输入：
+{
+  "Uid" : 20190332
+}
+输出：
+{
+    "code": 200,
+    "data": {
+        "Result": 0,
+        "Uid": 20190332,
+        "AccId": "test01"
+    }
+}
+17. 发送系统聊天消息http://localhost:8082/gmSendSystemMsg
+输入：
+{
+  "msg" : "test msg 01"
+}
+输出：
+{
+    "code": 200,
+    "data": {
+        "result": 0,
+        "msg": "test msg 01"
+    }
+}
+18. 通过玩家账号，查询玩家所有角色信息http://localhost:8082/gmGetUidsByAcc
+输入：
+{
+  "AccId" : "073f60283bf7cf3330186f5f3d15111e4"
+}
+输出：
+{
+    "code": 200,
+    "data": {
+        "Result": 0,
+        "AccId": "073f60283bf7cf3330186f5f3d15111e4",
+        "Lst": [
+            {
+                "Uid": 20255987,
+                "Sid": 1,
+                "Nick": "RồngNhỏMọn37",
+                "Mapid": 9001005
+            },
+            {
+                "Uid": 20255989,
+                "Sid": 2,
+                "Nick": "Bố của sơn",
+                "Mapid": 9001005
+            },
+            {
+                "Uid": 20206937,
+                "Sid": 8,
+                "Nick": "Siro",
+                "Mapid": 9139020
+            }
+        ]
+    }
+}
+19. 获取游戏服开服时间，并发送飞书消息http://localhost:8082/gmGetSvrOpenTime
+输入：
+{
+  "SvrId" : 2
+}
+输出：
+{
+    "code": 400,
+    "data": {
+        "Result": 1,
+        "SvrId": 2
+    },
+    "result": "参数错误: SvrId[2] 已合服到[1]"
+}
+20. 重置游戏服开服时间，并发送飞书消息http://localhost:8082/gmResetSvrOpenTime
+输入：
+{
+  "SvrId" : 1,
+  "TimeReset" : 1888888888
+}
+输出：
+{
+    "code": 200,
+    "data": {
+        "Result": 0,
+        "SvrId": 1,
+        "TimeReset": 1888888888
+    },
+    "result": "请去飞书群里面查看消息"
+}
+21. 清除指定服玩家聊天记录，并发送飞书消息，或 清除世界聊天和系统消息http://localhost:8082/gmClearChatMsg
+输入：
+{
+  "SvrId" : 1
+}
+输出：
+{
+    "code": 200,
+    "data": {
+        "Result": 0,
+        "SvrId": 1
+    }
+}
+22. 获取下一次游戏开服时间，并发送飞书消息http://127.0.0.1:8082/gmGetLsOpenNextTime
+输入：
+{
+}
+输出：
+{
+    "code": 200,
+    "data": {
+        "Result": 0
+    },
+    "result": "请去飞书群里面查看消息"
+}
+23. 设置下一次游戏开服时间，并发送飞书消息http://127.0.0.1:8082/gmSetLsOpenNextTime
+输入：
+{
+    "time_next": 1778812080
+}
+输出：
+{
+    "code": 200,
+    "data": {
+        "Result": 0
+    },
+    "result": "请去飞书群里面查看消息"
+}
+24. 导出兑换码到本地文件 http://localhost:8082/gmGiftSaveLocal
+输入：
+{
+}
+输出：
+{
+    "code": 200,
+    "data": {
+        "file": "./gmGiftLst.json",
+        "num": 14
+    }
+}
+25. 从本地文件导入兑换码 http://localhost:8082/gmGiftLoadLocal
+输入：
+{
+}
+输出：
+{
+    "code": 200,
+    "data": {
+        "file": "./gmGiftLst.json",
+        "num": 14
+    }
+}
+文档变更时间	版本号	变更人	变更内容
+2024年4月11日 / 	1.0.0	郭宏宇	创建文档
+2023年4月11日 / 	1.0.1 	潘政	记录后台功能
