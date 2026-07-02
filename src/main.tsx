@@ -1459,6 +1459,8 @@ function MailEditor({ global, items, onBack, onSubmit, onUploadItemTable, reward
   const [endTime, setEndTime] = React.useState(toDatetimeLocal(later));
   const [testUser, setTestUser] = React.useState("");
   const [error, setError] = React.useState("");
+  const [submitting, setSubmitting] = React.useState(false);
+  const isGlobalMail = mailType === "global";
 
   const selectedTemplate = templates.find((template) => template.id === templateId);
   const selectedRewardTemplate = rewardTemplates.find((template) => template.id === rewardTemplateId);
@@ -1477,8 +1479,8 @@ function MailEditor({ global, items, onBack, onSubmit, onUploadItemTable, reward
   }, [rewardMode, selectedRewardTemplate]);
 
   const submit = async () => {
-    const targets = global ? [] : toNumberArray(targetIds);
-    if (!global && !targets.length) {
+    const targets = isGlobalMail ? [] : toNumberArray(targetIds);
+    if (!isGlobalMail && !targets.length) {
       setError("请输入用户 ID");
       return;
     }
@@ -1491,22 +1493,29 @@ function MailEditor({ global, items, onBack, onSubmit, onUploadItemTable, reward
       return Number.isFinite(itemId) && itemId > 0 ? [itemId] : [];
     });
     setError("");
-    await onSubmit({
-      Typ: global ? 2 : 1,
-      TargetID: targets,
-      RegtBegin: 0,
-      Regt: 0,
-      Et: Math.floor(new Date(endTime).getTime() / 1000),
-      St: Math.floor(new Date(startTime).getTime() / 1000),
-      SenderName: "GM",
-      Titel: title,
-      Body: body,
-      BodyData: [],
-      BodyData2: [],
-      ItemLst: itemList,
-      Platform: [],
-      Version: [],
-    });
+    setSubmitting(true);
+    try {
+      await onSubmit({
+        Typ: isGlobalMail ? 2 : 1,
+        TargetID: targets,
+        RegtBegin: 0,
+        Regt: 0,
+        Et: Math.floor(new Date(endTime).getTime() / 1000),
+        St: Math.floor(new Date(startTime).getTime() / 1000),
+        SenderName: "GM",
+        Titel: title,
+        Body: body,
+        BodyData: [],
+        BodyData2: [],
+        ItemLst: itemList,
+        Platform: [],
+        Version: [],
+      });
+    } catch (submitError) {
+      setError(submitError instanceof Error ? submitError.message : "保存失败");
+    } finally {
+      setSubmitting(false);
+    }
   };
 
   return (
@@ -1517,17 +1526,17 @@ function MailEditor({ global, items, onBack, onSubmit, onUploadItemTable, reward
           <div className="mail-form-row mail-radio-row"><span /> <RadioPill checked={mailType === "personal"} label="个人邮件" onChange={() => setMailType("personal")} /><RadioPill checked={mailType === "global"} label="全局邮件" onChange={() => setMailType("global")} /></div>
           <label className="mail-form-row"><span>邮件模板</span><select value={templateId} onChange={(event) => setTemplateId(event.target.value)}><option value="">请选择</option>{templates.map((template) => <option key={template.id} value={template.id}>{template.name}</option>)}</select></label>
           <div className="mail-form-row mail-radio-row"><span>奖励方式</span><RadioPill checked={rewardMode === "custom"} label="自定义" onChange={() => setRewardMode("custom")} /><RadioPill checked={rewardMode === "internal"} label="内购" onChange={() => setRewardMode("internal")} /><RadioPill checked={rewardMode === "template"} label="奖励模板" onChange={() => setRewardMode("template")} /><RadioPill checked={rewardMode === "none"} label="无奖励" onChange={() => setRewardMode("none")} /></div>
-          {global && <div className="mail-form-row"><span>Filter</span><button className="mail-small-button" type="button">+ Add</button></div>}
+          {isGlobalMail && <div className="mail-form-row"><span>Filter</span><button className="mail-small-button" type="button">+ Add</button></div>}
           {rewardMode === "template" && <label className="mail-form-row"><span>奖励模板</span><select value={rewardTemplateId} onChange={(event) => setRewardTemplateId(event.target.value)}><option value="">请选择</option>{rewardTemplates.map((template) => <option key={template.id} value={template.id}>{template.title}</option>)}</select></label>}
           {rewardMode === "custom" && <RewardRows items={items} onUploadItemTable={onUploadItemTable} rewards={rewards} setRewards={setRewards} />}
-          {!global && <label className="mail-form-row mail-textarea-row"><span>用户 ID</span><textarea value={targetIds} onChange={(event) => setTargetIds(event.target.value)} /></label>}
-          {global && <><label className="mail-form-row"><span>测试用户</span><input disabled value={testUser} onChange={(event) => setTestUser(event.target.value)} placeholder="当前接口暂不支持" /></label><small className="mail-form-hint">当前服务器接口暂不支持添加测试用户</small></>}
+          {!isGlobalMail && <label className="mail-form-row mail-textarea-row"><span>用户 ID</span><textarea value={targetIds} onChange={(event) => setTargetIds(event.target.value)} /></label>}
+          {isGlobalMail && <><label className="mail-form-row"><span>测试用户</span><input disabled value={testUser} onChange={(event) => setTestUser(event.target.value)} placeholder="当前接口暂不支持" /></label><small className="mail-form-hint">当前服务器接口暂不支持添加测试用户</small></>}
           <label className="mail-form-row"><span>邮件标题</span><input value={title} onChange={(event) => setTitle(event.target.value)} /></label>
           <label className="mail-form-row mail-textarea-row"><span>邮件内容</span><textarea value={body} onChange={(event) => setBody(event.target.value)} /></label>
           <label className="mail-form-row"><span>生效时间</span><input type="datetime-local" value={startTime} onChange={(event) => setStartTime(event.target.value)} /><em>UTC {formatUtc(startTime)}</em></label>
           <label className="mail-form-row"><span>过期时间</span><input type="datetime-local" value={endTime} onChange={(event) => setEndTime(event.target.value)} /><em>UTC {formatUtc(endTime)}</em></label>
           {error && <div className="mail-form-error">{error}</div>}
-          <div className="mail-form-actions"><button onClick={() => void submit()} type="button">保存</button><button onClick={onBack} type="button">取消</button></div>
+          <div className="mail-form-actions"><button disabled={submitting} onClick={() => void submit()} type="button">{submitting ? "保存中..." : "保存"}</button><button disabled={submitting} onClick={onBack} type="button">取消</button></div>
         </div>
       </div>
     </section>
