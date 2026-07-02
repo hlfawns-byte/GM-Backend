@@ -5,14 +5,18 @@
   "type": "module",
   "scripts": {
     "dev": "npm run dev:test",
-    "dev:test": "set GM_PORTAL=test&& set VITE_GM_PORTAL=test&& vite --host 0.0.0.0 --port 5173",
-    "dev:prod": "set GM_PORTAL=prod&& set VITE_GM_PORTAL=prod&& vite --host 0.0.0.0 --port 5174",
-    "build": "tsc -b && vite build",
-    "build:test": "set GM_PORTAL=test&& set VITE_GM_PORTAL=test&& tsc -b && vite build",
-    "build:prod": "set GM_PORTAL=prod&& set VITE_GM_PORTAL=prod&& tsc -b && vite build",
+    "dev:test": "node scripts/run-vite.mjs test dev --host 0.0.0.0 --port 5173",
+    "dev:prod": "node scripts/run-vite.mjs prod dev --host 0.0.0.0 --port 5174",
+    "build": "npm run build:test",
+    "build:test": "node scripts/build.mjs test",
+    "build:prod": "node scripts/build.mjs prod",
     "preview": "npm run preview:test",
-    "preview:test": "set GM_PORTAL=test&& set VITE_GM_PORTAL=test&& vite preview --host 0.0.0.0 --port 4173",
-    "preview:prod": "set GM_PORTAL=prod&& set VITE_GM_PORTAL=prod&& vite preview --host 0.0.0.0 --port 4174"
+    "preview:test": "node scripts/run-vite.mjs test preview --host 0.0.0.0 --port 4173",
+    "preview:prod": "node scripts/run-vite.mjs prod preview --host 0.0.0.0 --port 4174",
+    "serve:test": "node server.mjs --portal=test",
+    "serve:prod": "node server.mjs --portal=prod",
+    "start:test": "npm run serve:test",
+    "start:prod": "npm run serve:prod"
   },
   "dependencies": {
     "react": "latest",

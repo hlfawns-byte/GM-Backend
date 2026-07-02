@@ -193,7 +193,7 @@ const defaultMailLanguage = mailLanguages[0];
 const portal = import.meta.env.VITE_GM_PORTAL === "prod" ? "prod" : "test";
 const portalGameConfig: GameConfig =
   portal === "prod"
-    ? { name: "包包4", serverName: "正式服", serverUrl: "https://baobao4-gm.touka.local", environment: "Prod", logo: "包" }
+    ? { name: "包包4", serverName: "正式服", serverUrl: "/gm-api", environment: "Prod", logo: "包" }
     : { name: "包包4", serverName: "测试服", serverUrl: "/gm-api", environment: "Test", logo: "包" };
 const gameConfigs: GameConfig[] = [portalGameConfig];
 

@@ -66,7 +66,7 @@ const defaultItemTable = "D:\\Project\\Bb_Main\\Config\\Excel\\Item.xlsx";
 const defaultAccounts: ManagedAccountRecord[] = [];
 const defaultGames: GameConfigRecord[] = [
   portal === "prod"
-    ? { id: 1, name: "包包4", serverName: "正式服", serverUrl: "https://baobao4-gm.touka.local", environment: "Prod", logo: "包" }
+    ? { id: 1, name: "包包4", serverName: "正式服", serverUrl: "/gm-api", environment: "Prod", logo: "包" }
     : { id: 1, name: "包包4", serverName: "测试服", serverUrl: "/gm-api", environment: "Test", logo: "包" },
 ];
 
