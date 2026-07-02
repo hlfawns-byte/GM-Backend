@@ -1991,6 +1991,11 @@ tbody tr:hover,
   cursor: pointer;
 }
 
+.mail-upload-link.disabled {
+  opacity: 0.62;
+  pointer-events: none;
+}
+
 .mail-form-hint {
   margin-top: -16px;
   padding-left: 106px;

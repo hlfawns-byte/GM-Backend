@@ -19,9 +19,10 @@
     "start:prod": "npm run serve:prod"
   },
   "dependencies": {
+    "lucide-react": "latest",
     "react": "latest",
     "react-dom": "latest",
-    "lucide-react": "latest"
+    "xlsx": "^0.18.5"
   },
   "devDependencies": {
     "@types/node": "latest",

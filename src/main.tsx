@@ -1594,6 +1594,8 @@ function MailEditor({ global, items, onBack, onSubmit, onUploadItemTable, reward
 }
 
 function RewardRows({ items, onUploadItemTable, rewards, setRewards }: { items: ItemOption[]; onUploadItemTable: (file: File) => Promise<void>; rewards: MailRewardItem[]; setRewards: (items: MailRewardItem[]) => void }) {
+  const [uploading, setUploading] = React.useState(false);
+  const [uploadError, setUploadError] = React.useState("");
   const updateReward = (index: number, patch: Partial<MailRewardItem>) => {
     setRewards(rewards.map((reward, rewardIndex) => rewardIndex === index ? { ...reward, ...patch } : reward));
   };
@@ -1611,7 +1613,14 @@ function RewardRows({ items, onUploadItemTable, rewards, setRewards }: { items: 
         </div>
       ))}
       <div className="mail-form-row mail-add-reward-row"><span /><button className="mail-add-reward" onClick={() => setRewards([...rewards, { itemId: "", count: "0" }])} type="button">＋</button></div>
-      <div className="mail-form-row"><span /><label className="mail-upload-link">上传Item表<input accept=".xlsx,.xls" onChange={(event) => { const file = event.target.files?.[0]; if (file) void onUploadItemTable(file); }} type="file" /></label><small>{items.length ? `已加载 ${items.length} 个道具` : "未上传道具表"}</small></div>
+      <div className="mail-form-row"><span /><label className={`mail-upload-link ${uploading ? "disabled" : ""}`}>{uploading ? "上传中..." : "上传Item表"}<input accept=".xlsx,.xls" disabled={uploading} onChange={(event) => {
+        const file = event.target.files?.[0];
+        event.currentTarget.value = "";
+        if (!file) return;
+        setUploading(true);
+        setUploadError("");
+        void onUploadItemTable(file).catch((error) => setUploadError(error instanceof Error ? error.message : "上传Item表失败")).finally(() => setUploading(false));
+      }} type="file" /></label><small>{uploadError || (items.length ? `已加载 ${items.length} 个道具` : "未上传道具表")}</small></div>
     </div>
   );
 }

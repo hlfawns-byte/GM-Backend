@@ -2,7 +2,7 @@ import { createServer } from "node:http";
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { spawnSync } from "node:child_process";
+import XLSX from "xlsx";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const portalArg = process.argv.find((arg) => arg.startsWith("--portal="))?.split("=")[1];
@@ -174,34 +174,31 @@ function extractMultipartFile(buffer, contentType) {
 }
 
 function parseItemWorkbook(file) {
-  const script = [
-    "import json, sys, openpyxl",
-    "path=sys.argv[1]",
-    "wb=openpyxl.load_workbook(path, read_only=True, data_only=True)",
-    "ws=wb['Item'] if 'Item' in wb.sheetnames else wb[wb.sheetnames[0]]",
-    "rows=list(ws.iter_rows(values_only=True))",
-    "headers=[str(v).strip() if v is not None else '' for v in rows[0]] if rows else []",
-    "id_col=headers.index('Id') if 'Id' in headers else 1",
-    "name_col=2",
-    "icon_col=headers.index('Icon') if 'Icon' in headers else -1",
-    "out=[]",
-    "for row in rows[4:]:",
-    "    if id_col >= len(row) or row[id_col] in (None, ''): continue",
-    "    try: item_id=int(row[id_col])",
-    "    except Exception: continue",
-    "    name=str(row[name_col]).strip() if name_col < len(row) and row[name_col] not in (None, '') else ''",
-    "    icon=str(row[icon_col]).strip() if icon_col >= 0 and icon_col < len(row) and row[icon_col] not in (None, '') else ''",
-    "    out.append({'id': item_id, 'name': name, 'icon': icon})",
-    "print(json.dumps(out, ensure_ascii=False))",
-  ].join("\n");
-  const result = spawnSync(process.env.PYTHON || "python", ["-c", script, file], {
-    encoding: "utf8",
-    env: { ...process.env, PYTHONIOENCODING: "utf-8" },
-    maxBuffer: 10 * 1024 * 1024,
+  const workbook = XLSX.readFile(file, { cellDates: false });
+  const sheetName = workbook.SheetNames.includes("Item") ? "Item" : workbook.SheetNames[0];
+  const sheet = workbook.Sheets[sheetName];
+  if (!sheet) throw new Error("Item.xlsx 中没有可读取的工作表");
+  const rows = XLSX.utils.sheet_to_json(sheet, { header: 1, defval: "" });
+  if (!Array.isArray(rows) || rows.length === 0) return [];
+
+  const headers = rows[0].map((value) => String(value ?? "").trim());
+  const findColumn = (names, fallback) => {
+    const index = headers.findIndex((header) => names.some((name) => header.toLowerCase() === name.toLowerCase()));
+    return index >= 0 ? index : fallback;
+  };
+  const idCol = findColumn(["Id", "ID", "ItemId", "ItemID", "道具ID"], 1);
+  const nameCol = findColumn(["Name", "ItemName", "名称", "道具名"], 2);
+  const iconCol = findColumn(["Icon", "图标"], -1);
+
+  return rows.slice(1).flatMap((row) => {
+    const itemId = Number(row[idCol]);
+    if (!Number.isFinite(itemId) || itemId <= 0) return [];
+    return [{
+      id: itemId,
+      name: String(row[nameCol] ?? "").trim(),
+      icon: iconCol >= 0 ? String(row[iconCol] ?? "").trim() : "",
+    }];
   });
-  if (result.status !== 0) throw new Error(result.stderr || "解析 Item.xlsx 失败，请确认服务器已安装 python 和 openpyxl");
-  const parsed = JSON.parse(result.stdout || "[]");
-  return Array.isArray(parsed) ? parsed : [];
 }
 
 async function handleLocalApi(req, res, pathname) {
