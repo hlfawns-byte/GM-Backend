@@ -1495,6 +1495,11 @@ function MailEditor({ global, items, onBack, onSubmit, onUploadItemTable, reward
       setError("请输入邮件标题");
       return;
     }
+    const endSeconds = parseDatetimeLocalSeconds(endTime);
+    if (!endSeconds) {
+      setError("请选择有效的过期时间");
+      return;
+    }
     const itemList = rewardMode === "none" ? [] : rewards.flatMap((reward) => {
       const itemId = Number(reward.itemId);
       return Number.isFinite(itemId) && itemId > 0 ? [itemId] : [];
@@ -1507,8 +1512,8 @@ function MailEditor({ global, items, onBack, onSubmit, onUploadItemTable, reward
         TargetID: targets,
         RegtBegin: 0,
         Regt: 0,
-        Et: Math.floor(new Date(endTime).getTime() / 1000),
-        St: Math.floor(new Date(startTime).getTime() / 1000),
+        Et: endSeconds,
+        St: 0,
         SenderName: "GM",
         Titel: title,
         Body: body,
@@ -1541,7 +1546,7 @@ function MailEditor({ global, items, onBack, onSubmit, onUploadItemTable, reward
           {isGlobalMail && <><label className="mail-form-row"><span>测试用户</span><input disabled value={testUser} onChange={(event) => setTestUser(event.target.value)} placeholder="当前接口暂不支持" /></label><small className="mail-form-hint">当前服务器接口暂不支持添加测试用户</small></>}
           <label className="mail-form-row"><span>邮件标题</span><input value={title} onChange={(event) => setTitle(event.target.value)} /></label>
           <label className="mail-form-row mail-textarea-row"><span>邮件内容</span><textarea value={body} onChange={(event) => setBody(event.target.value)} /></label>
-          <label className="mail-form-row"><span>生效时间</span><input type="datetime-local" value={startTime} onChange={(event) => setStartTime(event.target.value)} /><em>UTC {formatUtc(startTime)}</em></label>
+          <label className="mail-form-row"><span>生效时间</span><input disabled type="datetime-local" value={startTime} onChange={(event) => setStartTime(event.target.value)} /><em>立即生效，当前接口暂不支持定时</em></label>
           <label className="mail-form-row"><span>过期时间</span><input type="datetime-local" value={endTime} onChange={(event) => setEndTime(event.target.value)} /><em>UTC {formatUtc(endTime)}</em></label>
           {error && <div className="mail-form-error">{error}</div>}
           <div className="mail-form-actions"><button disabled={submitting} onClick={() => void submit()} type="button">{submitting ? "保存中..." : "保存"}</button><button disabled={submitting} onClick={onBack} type="button">取消</button></div>
@@ -1739,7 +1744,10 @@ function GiftEditor({ items, onBack, onSubmit }: { items: ItemOption[]; onBack: 
       const count = Number(reward.count);
       return Number.isFinite(itemId) && Number.isFinite(count) && itemId > 0 && count > 0 ? [itemId, count] : [];
     });
-    await onSubmit({ Id: ids.length ? ids : [code], Type: type === "global" ? 1 : 0, Group: Date.now() % 100000, Num: Number(maxCount), Et: Math.floor(new Date(endTime).getTime() / 1000), ItemLst: itemList, Desc: templateName, Enabled: enabled, St: Math.floor(new Date(startTime).getTime() / 1000) });
+    const startSeconds = parseDatetimeLocalSeconds(startTime);
+    const endSeconds = parseDatetimeLocalSeconds(endTime);
+    if (!startSeconds || !endSeconds || endSeconds <= startSeconds) return;
+    await onSubmit({ Id: ids.length ? ids : [code], Type: type === "global" ? 1 : 0, Group: Date.now() % 100000, Num: Number(maxCount), Et: endSeconds, ItemLst: itemList, Desc: templateName, Enabled: enabled, St: startSeconds });
   };
 
   return (
@@ -1790,9 +1798,17 @@ function toDatetimeLocal(date: Date) {
   return local.toISOString().slice(0, 16);
 }
 
+function parseDatetimeLocalSeconds(value: string) {
+  const normalized = value.trim().replace(/\//g, "-").replace(" ", "T");
+  const parsed = normalized ? new Date(normalized) : null;
+  const seconds = parsed ? Math.floor(parsed.getTime() / 1000) : 0;
+  return Number.isFinite(seconds) && seconds > 0 ? seconds : 0;
+}
+
 function formatUtc(value: string) {
   if (!value) return "";
-  return new Date(value).toISOString().slice(0, 16).replace("T", " ");
+  const seconds = parseDatetimeLocalSeconds(value);
+  return seconds ? new Date(seconds * 1000).toISOString().slice(0, 16).replace("T", " ") : "";
 }
 
 function formatTimestamp(value: unknown) {
