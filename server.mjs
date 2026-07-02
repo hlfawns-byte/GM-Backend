@@ -416,6 +416,7 @@ async function handleLocalApi(req, res, pathname) {
       role: String(body.role ?? "运营"),
       games: Array.isArray(body.games) ? body.games.map(String) : ["包包4/测试服"],
       permissions: Array.isArray(body.permissions) ? body.permissions.map(String) : [],
+      isManager: Boolean(body.isManager),
       status: "启用",
     };
     writeAccounts([created, ...accounts]);

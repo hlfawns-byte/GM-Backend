@@ -68,6 +68,7 @@ type ManagedAccount = {
   role: string;
   games: string[];
   permissions: string[];
+  isManager?: boolean;
   status: "启用" | "停用";
 };
 
@@ -75,6 +76,7 @@ type AuthSession = {
   adminAccount: string;
   operatorAccount: string;
   isAdmin: boolean;
+  isRootAdmin: boolean;
   games: string[];
 };
 
@@ -438,8 +440,9 @@ type StoredSession = {
 function loadStoredSession(): StoredSession {
   try {
     const parsed = JSON.parse(localStorage.getItem(storageKey) ?? "{}") as Partial<StoredSession>;
+    const auth = parsed.auth ? { ...parsed.auth, isRootAdmin: parsed.auth.isRootAdmin ?? parsed.auth.isAdmin } : null;
     return {
-      auth: parsed.auth ?? null,
+      auth,
       session: parsed.session ?? null,
       active: parsed.active && parsed.active in modules ? parsed.active : "dashboard",
     };
@@ -678,7 +681,7 @@ function App() {
           )}
         </div>
       </section>
-      {auth.isAdmin && accountPanelOpen && <AccountPanel accounts={accounts} games={games} session={session} onAdd={createAccount} onDelete={deleteAccount} onClose={() => setAccountPanelOpen(false)} />}
+      {auth.isAdmin && accountPanelOpen && <AccountPanel accounts={accounts} games={games} canManageAdmins={auth.isRootAdmin} session={session} onAdd={createAccount} onDelete={deleteAccount} onClose={() => setAccountPanelOpen(false)} />}
       {auth.isAdmin && gamePanelOpen && <GamePanel games={games} onAdd={createGame} onDelete={deleteGame} onUpdate={updateGame} onClose={() => setGamePanelOpen(false)} />}
       {auth.isAdmin && logPanelOpen && <UserLogPanel onClose={() => setLogPanelOpen(false)} />}
     </main>
@@ -734,8 +737,9 @@ function LoginScreen({ games, onLogin }: { games: GameConfig[]; onLogin: (sessio
             onLogin({
               adminAccount,
               operatorAccount,
-              isAdmin: !operator,
-              games: operator?.games ?? games.map((item) => `${item.name}/${item.serverName}`),
+              isAdmin: !operator || Boolean(operator?.isManager),
+              isRootAdmin: !operator,
+              games: !operator || operator.isManager ? games.map((item) => `${item.name}/${item.serverName}`) : operator.games,
             });
             void fetch("/local-api/user-logs", {
               method: "POST",
@@ -2031,8 +2035,8 @@ function configsToNoticePayload(configs: NoticeConfig[]) {
   return payload;
 }
 
-function AccountPanel({ accounts, games, session, onAdd, onDelete, onClose }: { accounts: ManagedAccount[]; games: GameConfig[]; session: Session; onAdd: (account: ManagedAccount) => Promise<void>; onDelete: (accountId: number) => Promise<void>; onClose: () => void }) {
-  const [form, setForm] = React.useState({ account: "", password: "", displayName: "", role: "运营", game: `${session.game}/${session.serverName}`, permissions: ["用户查询", "日志审计"] });
+function AccountPanel({ accounts, canManageAdmins, games, session, onAdd, onDelete, onClose }: { accounts: ManagedAccount[]; canManageAdmins: boolean; games: GameConfig[]; session: Session; onAdd: (account: ManagedAccount) => Promise<void>; onDelete: (accountId: number) => Promise<void>; onClose: () => void }) {
+  const [form, setForm] = React.useState({ account: "", password: "", displayName: "", role: "运营", game: `${session.game}/${session.serverName}`, permissions: ["用户查询", "日志审计"], isManager: false });
   const [formError, setFormError] = React.useState("");
   const togglePermission = (permission: string) => setForm((current) => ({ ...current, permissions: current.permissions.includes(permission) ? current.permissions.filter((item) => item !== permission) : [...current.permissions, permission] }));
 
@@ -2051,8 +2055,8 @@ function AccountPanel({ accounts, games, session, onAdd, onDelete, onClose }: { 
             event.preventDefault();
             try {
               setFormError("");
-              await onAdd({ id: Date.now(), account: form.account, password: form.password, displayName: form.displayName || form.account, role: form.role, games: [form.game], permissions: form.permissions, status: "启用" });
-              setForm((current) => ({ ...current, account: "", password: "", displayName: "" }));
+              await onAdd({ id: Date.now(), account: form.account, password: form.password, displayName: form.displayName || form.account, role: form.role, games: form.isManager ? games.map((game) => `${game.name}/${game.serverName}`) : [form.game], permissions: form.permissions, isManager: canManageAdmins && form.isManager, status: "启用" });
+              setForm((current) => ({ ...current, account: "", password: "", displayName: "", isManager: false }));
             } catch (error) {
               setFormError(error instanceof Error ? error.message : "创建账号失败");
             }
@@ -2062,15 +2066,16 @@ function AccountPanel({ accounts, games, session, onAdd, onDelete, onClose }: { 
             <label>显示名称<input value={form.displayName} onChange={(event) => setForm({ ...form, displayName: event.target.value })} placeholder="成员姓名" /></label>
             <label>角色<select value={form.role} onChange={(event) => setForm({ ...form, role: event.target.value })}><option>策划</option><option>程序</option><option>测试</option><option>运营</option></select></label>
             <label>游戏权限<select value={form.game} onChange={(event) => setForm({ ...form, game: event.target.value })}>{games.map((game) => <option key={`${game.name}/${game.serverName}`} value={`${game.name}/${game.serverName}`}>{game.name} / {game.serverName}</option>)}</select></label>
+            {canManageAdmins && <label className="permission-check admin-toggle"><input checked={form.isManager} onChange={(event) => setForm({ ...form, isManager: event.target.checked })} type="checkbox" />设为后台管理员</label>}
             <div className="permission-box"><div>功能权限</div>{permissionOptions.map((item) => <label className="permission-check" key={item}><input checked={form.permissions.includes(item)} onChange={() => togglePermission(item)} type="checkbox" />{item}</label>)}</div>
             <button className="primary-button" type="submit"><Plus size={15} />创建账号</button>
             {formError && <div className="form-error">{formError}</div>}
           </form>
           <div className="managed-list">{accounts.length === 0 ? <div className="empty-table"><strong>暂无子账号</strong><span>请在左侧创建账号给其他人使用。</span></div> : accounts.map((account) => (
             <article className="managed-account" key={account.id}>
-              <div><strong>{account.displayName}</strong><span>{account.account} / {account.role}</span></div>
-              <div className="tag-row">{account.games.map((item) => <small key={item}>{item}</small>)}{account.permissions.slice(0, 3).map((item) => <small key={item}>{item}</small>)}</div>
-              <div className="managed-actions"><button onClick={() => void onDelete(account.id)} type="button"><Trash2 size={14} />删除</button></div>
+              <div><strong>{account.displayName}</strong><span>{account.account} / {account.role}{account.isManager ? " / 后台管理员" : ""}</span></div>
+              <div className="tag-row">{account.isManager ? <small>全部游戏</small> : account.games.map((item) => <small key={item}>{item}</small>)}{account.permissions.slice(0, 3).map((item) => <small key={item}>{item}</small>)}</div>
+              <div className="managed-actions">{canManageAdmins ? <button onClick={() => void onDelete(account.id)} type="button"><Trash2 size={14} />删除</button> : <button disabled type="button"><Trash2 size={14} />仅admin可删</button>}</div>
             </article>
           ))}</div>
         </div>

@@ -12,6 +12,7 @@ type ManagedAccountRecord = {
   role: string;
   games: string[];
   permissions: string[];
+  isManager?: boolean;
   status: "启用" | "停用" | "鍚敤" | "鍋滅敤";
 };
 
@@ -535,6 +536,7 @@ function localAccountPlugin() {
             role: String(body.role ?? "运营"),
             games: Array.isArray(body.games) ? body.games.map(String) : ["包包4/测试服"],
             permissions: Array.isArray(body.permissions) ? body.permissions.map(String) : [],
+            isManager: Boolean(body.isManager),
             status: "启用",
           };
           writeAccounts([created, ...accounts]);
