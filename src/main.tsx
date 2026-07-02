@@ -1480,7 +1480,6 @@ function MailEditor({ global, items, onBack, onSubmit, onUploadItemTable, reward
   const [platformFilter, setPlatformFilter] = React.useState("all");
   const [regBegin, setRegBegin] = React.useState("");
   const [regEnd, setRegEnd] = React.useState("");
-  const [serverFilter, setServerFilter] = React.useState("");
   const [error, setError] = React.useState("");
   const [submitting, setSubmitting] = React.useState(false);
   const isGlobalMail = mailType === "global";
@@ -1573,7 +1572,6 @@ function MailEditor({ global, items, onBack, onSubmit, onUploadItemTable, reward
             <label><span>系统</span><select value={platformFilter} onChange={(event) => setPlatformFilter(event.target.value)}><option value="all">全部</option><option value="1">iOS</option><option value="2">Android</option></select></label>
             <label><span>注册开始</span><input type="datetime-local" value={regBegin} onChange={(event) => setRegBegin(event.target.value)} /></label>
             <label><span>注册结束</span><input type="datetime-local" value={regEnd} onChange={(event) => setRegEnd(event.target.value)} /></label>
-            <label><span>特定区服</span><input disabled value={serverFilter} onChange={(event) => setServerFilter(event.target.value)} placeholder="当前入口已绑定所选区服" /></label>
           </div>
           {rewardMode === "template" && <label className="mail-form-row"><span>奖励模板</span><select value={rewardTemplateId} onChange={(event) => setRewardTemplateId(event.target.value)}><option value="">请选择</option>{rewardTemplates.map((template) => <option key={template.id} value={template.id}>{template.title}</option>)}</select></label>}
           {rewardMode === "custom" && <RewardRows items={items} onUploadItemTable={onUploadItemTable} rewards={rewards} setRewards={setRewards} />}
