@@ -1370,11 +1370,12 @@ function MailSuitePage({ active, postWithToken, setActive }: { active: MailSecti
           const message = `邮件已提交到服务器${data?.Id ? `，ID：${String(data.Id)}` : ""}`;
           setStatus(message);
           const submittedTyp = Number(getObject(body)?.Typ);
+          const submittedTargets = getArray(getObject(body)?.TargetID);
           setView("list");
           await refreshMailList();
-          if (submittedTyp === 2 && active !== "mailGlobal") {
+          if (submittedTyp === 1 && submittedTargets.length === 0 && active !== "mailGlobal") {
             setActive("mailGlobal");
-          } else if (submittedTyp === 1 && active !== "mailPersonal") {
+          } else if (submittedTyp === 1 && submittedTargets.length > 0 && active !== "mailPersonal") {
             setActive("mailPersonal");
           }
           setStatus(message);
@@ -1409,6 +1410,9 @@ function MailSuitePage({ active, postWithToken, setActive }: { active: MailSecti
 function MailListPage({ active, mailRows, onCreate, onDelete, onRefresh, recordTab, setRecordTab, setUserIdQuery, status, userIdQuery }: { active: MailSectionKey; mailRows: Record<string, unknown>[]; onCreate: () => void; onDelete: (id: string) => Promise<void>; onRefresh: () => void; recordTab: "mail" | "claim"; setRecordTab: (tab: "mail" | "claim") => void; setUserIdQuery: (value: string) => void; status: string; userIdQuery: string }) {
   const global = active === "mailGlobal";
   const rows = mailRows.filter((row) => {
+    const targetIds = getArray(row.TargetID);
+    if (global && targetIds.length > 0) return false;
+    if (!global && targetIds.length === 0) return false;
     if (!userIdQuery.trim()) return true;
     return formatCell(row.TargetID).includes(userIdQuery.trim());
   });
@@ -1542,7 +1546,7 @@ function MailEditor({ global, items, onBack, onSubmit, onUploadItemTable, reward
     setSubmitting(true);
     try {
       await onSubmit({
-        Typ: isGlobalMail ? 2 : 1,
+        Typ: 1,
         TargetID: targets,
         RegtBegin: regBeginSeconds,
         Regt: regEndSeconds,
