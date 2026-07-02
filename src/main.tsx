@@ -391,6 +391,20 @@ function getArray(value: unknown): unknown[] {
   return Array.isArray(value) ? value : [];
 }
 
+function getApiData(payload: unknown) {
+  return getObject(getObject(payload)?.data) ?? getObject(payload);
+}
+
+function apiBusinessError(result: ApiPostResponse) {
+  if (!result.ok) return `HTTP ${result.status}`;
+  const data = getApiData(result.payload);
+  const resultCode = data?.Result ?? getObject(result.payload)?.Result;
+  if (resultCode !== undefined && Number(resultCode) !== 0) {
+    return String(data?.Desc ?? data?.Msg ?? getObject(result.payload)?.result ?? `Result ${resultCode}`);
+  }
+  return "";
+}
+
 function formatCell(value: unknown) {
   if (value === null || value === undefined || value === "") return "暂无数据";
   if (Array.isArray(value)) return value.length ? value.join(", ") : "暂无数据";
@@ -1280,8 +1294,14 @@ function MailSuitePage({ active, postWithToken, setActive }: { active: MailSecti
 
   const refreshMailList = React.useCallback(async () => {
     const result = await postWithToken("/gmMailLst", {});
-    const data = getObject(result.payload)?.data ?? getObject(result.payload);
-    const rows = getArray(getObject(data)?.Lst).filter((row): row is Record<string, unknown> => Boolean(getObject(row)));
+    const error = apiBusinessError(result);
+    if (error) {
+      setStatus(`邮件列表读取失败：${error}`);
+      setMailRows([]);
+      return;
+    }
+    const data = getApiData(result.payload);
+    const rows = getArray(data?.Lst).filter((row): row is Record<string, unknown> => Boolean(getObject(row)));
     setMailRows(rows);
   }, [postWithToken]);
 
@@ -1332,7 +1352,13 @@ function MailSuitePage({ active, postWithToken, setActive }: { active: MailSecti
         onBack={() => setView("list")}
         onSubmit={async (body) => {
           const result = await postWithToken("/gmMailAdd", body);
-          setStatus(result.ok ? "邮件已提交到服务器" : `邮件提交失败：HTTP ${result.status}`);
+          const error = apiBusinessError(result);
+          if (error) {
+            setStatus(`邮件提交失败：${error}`);
+            return;
+          }
+          const data = getApiData(result.payload);
+          setStatus(`邮件已提交到服务器${data?.Id ? `，ID：${String(data.Id)}` : ""}`);
           setView("list");
           await refreshMailList();
         }}
@@ -1353,7 +1379,8 @@ function MailSuitePage({ active, postWithToken, setActive }: { active: MailSecti
       onCreate={() => setView("edit")}
       onDelete={async (id) => {
         const result = await postWithToken("/gmMailDel", { Id: id });
-        setStatus(result.ok ? "邮件已删除" : `删除失败：HTTP ${result.status}`);
+        const error = apiBusinessError(result);
+        setStatus(error ? `删除失败：${error}` : "邮件已删除");
         await refreshMailList();
       }}
       onRefresh={() => void refreshMailList()}
@@ -1461,8 +1488,7 @@ function MailEditor({ global, items, onBack, onSubmit, onUploadItemTable, reward
     }
     const itemList = rewardMode === "none" ? [] : rewards.flatMap((reward) => {
       const itemId = Number(reward.itemId);
-      const count = Number(reward.count);
-      return Number.isFinite(itemId) && Number.isFinite(count) && itemId > 0 && count > 0 ? [itemId, count] : [];
+      return Number.isFinite(itemId) && itemId > 0 ? [itemId] : [];
     });
     setError("");
     await onSubmit({
