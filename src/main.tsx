@@ -1518,8 +1518,13 @@ function MailEditor({ global, items, onBack, onSubmit, onUploadItemTable, reward
     }
     const itemList = rewardMode === "none" ? [] : rewards.flatMap((reward) => {
       const itemId = Number(reward.itemId);
-      return Number.isFinite(itemId) && itemId > 0 ? [itemId] : [];
+      const count = Number(reward.count);
+      return Number.isFinite(itemId) && Number.isFinite(count) && itemId > 0 && count > 0 ? [itemId, count] : [];
     });
+    if (rewardMode !== "none" && rewards.some((reward) => reward.itemId || reward.count) && itemList.length === 0) {
+      setError("请填写有效的奖励道具和数量，或选择无奖励");
+      return;
+    }
     const versionList = toFlexibleNumberArray(versionFilter);
     const platformList = platformFilter === "all" ? [] : [Number(platformFilter)];
     const svrIdList = toFlexibleNumberArray(svrIdFilter);
