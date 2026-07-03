@@ -257,7 +257,22 @@ function writeAdminCredentials(credentials: AdminCredentials) {
 function sendJson(res: import("node:http").ServerResponse, status: number, data: unknown) {
   res.statusCode = status;
   res.setHeader("Content-Type", "application/json; charset=utf-8");
+  res.setHeader("Cache-Control", "no-store");
   res.end(JSON.stringify(data));
+}
+
+function appVersionPayload() {
+  const packageJson = readJsonFile<{ version?: string }>(path.resolve("package.json"), {});
+  const version = String(packageJson.version ?? "0.0.0");
+  const srcFile = path.resolve("src/main.tsx");
+  const configFile = path.resolve("vite.config.ts");
+  const srcMtime = fs.existsSync(srcFile) ? fs.statSync(srcFile).mtimeMs : 0;
+  const configMtime = fs.existsSync(configFile) ? fs.statSync(configFile).mtimeMs : 0;
+  return {
+    version,
+    build: `${version}-${Math.max(srcMtime, configMtime)}`,
+    portal,
+  };
 }
 
 function gmApiBase(serverUrl: unknown) {
@@ -311,12 +326,18 @@ function localAccountPlugin() {
     configureServer(server: import("vite").ViteDevServer) {
       server.middlewares.use(async (req, res, next) => {
         const url = req.url ?? "";
-        if (!url.startsWith("/local-api/")) {
+        const pathname = url.split("?")[0];
+        if (!pathname.startsWith("/local-api/")) {
           next();
           return;
         }
 
-        if (url === "/local-api/accounts" && req.method === "GET") {
+        if (pathname === "/local-api/app-version" && req.method === "GET") {
+          sendJson(res, 200, appVersionPayload());
+          return;
+        }
+
+        if (pathname === "/local-api/accounts" && req.method === "GET") {
           sendJson(res, 200, { accounts: readAccounts().map(({ password, ...account }) => account) });
           return;
         }

@@ -196,7 +196,7 @@ type MailRewardItem = {
 const MAX_REWARD_COUNT = 2_000_000_000;
 
 function validateRewardRows(rewards: MailRewardItem[], items: ItemOption[]) {
-  const filled = rewards.filter((reward) => reward.itemId.trim() || reward.count.trim());
+  const filled = rewards.filter((reward) => reward.itemId.trim() || (reward.count.trim() && reward.count.trim() !== "0"));
   if (!filled.length) return { ok: true, itemList: [] as number[] };
   const itemList: number[] = [];
   for (const reward of filled) {
@@ -212,6 +212,9 @@ function validateRewardRows(rewards: MailRewardItem[], items: ItemOption[]) {
       return { ok: false, message: `道具 ${itemId} 未匹配到Item表，不能保存`, itemList: [] as number[] };
     }
     itemList.push(itemId, count);
+  }
+  if (itemList.length > 200) {
+    return { ok: false, message: "奖励道具过多，请控制在100组以内后再保存", itemList: [] as number[] };
   }
   return { ok: true, itemList };
 }
@@ -403,7 +406,7 @@ const modules: Record<SectionKey, ModuleConfig> = {
 
 function toNumberArray(value?: string) {
   return String(value ?? "")
-    .split(",")
+    .split(/[\s,，;；]+/)
     .map((item) => Number(item.trim()))
     .filter((item) => Number.isFinite(item));
 }
@@ -467,6 +470,12 @@ function formatCell(value: unknown) {
   return String(value);
 }
 
+function filledRewards(rewards: MailRewardItem[]) {
+  return rewards
+    .filter((reward) => reward.itemId.trim() || (reward.count.trim() && reward.count.trim() !== "0"))
+    .map((reward) => ({ itemId: String(Number(reward.itemId)), count: String(Number(reward.count)) }));
+}
+
 function apiBaseFromServerUrl(url: string) {
   const normalized = url.trim();
   if (!normalized || normalized.startsWith("http")) return "/gm-api";
@@ -507,6 +516,8 @@ function App() {
   const [accountPanelOpen, setAccountPanelOpen] = React.useState(false);
   const [gamePanelOpen, setGamePanelOpen] = React.useState(false);
   const [logPanelOpen, setLogPanelOpen] = React.useState(false);
+  const [appBuild, setAppBuild] = React.useState("");
+  const [versionNoticeOpen, setVersionNoticeOpen] = React.useState(false);
   const [openNavGroups, setOpenNavGroups] = React.useState<Record<string, boolean>>(() => Object.fromEntries(navGroups.map((group) => [group.label, true])));
 
   const refreshAccounts = React.useCallback(async () => {
@@ -530,11 +541,43 @@ function App() {
     localStorage.setItem(storageKey, JSON.stringify({ auth, session, active }));
   }, [auth, session, active]);
 
+  React.useEffect(() => {
+    let disposed = false;
+    const checkVersion = async () => {
+      try {
+        const response = await fetch(`/local-api/app-version?t=${Date.now()}`, { cache: "no-store" });
+        const payload = (await response.json().catch(() => ({}))) as { build?: string };
+        const nextBuild = String(payload.build ?? "");
+        if (!nextBuild || disposed) return;
+        setAppBuild((currentBuild) => {
+          if (!currentBuild) return nextBuild;
+          if (currentBuild !== nextBuild) {
+            setVersionNoticeOpen(true);
+          }
+          return currentBuild;
+        });
+      } catch {
+        // Version polling should never interrupt normal GM operations.
+      }
+    };
+    void checkVersion();
+    const timer = window.setInterval(() => void checkVersion(), 60_000);
+    return () => {
+      disposed = true;
+      window.clearInterval(timer);
+    };
+  }, []);
+
   const logout = () => {
     localStorage.removeItem(storageKey);
     setSession(null);
     setAuth(null);
     setActive("dashboard");
+  };
+
+  const reloginForNewVersion = () => {
+    localStorage.removeItem(storageKey);
+    window.location.reload();
   };
 
   const writeUserLog = React.useCallback(async (log: { action: string; target: string; detail?: string; result?: "成功" | "失败" }) => {
@@ -555,12 +598,14 @@ function App() {
     }).catch(() => undefined);
   }, [auth, session]);
 
+  const versionModal = versionNoticeOpen ? <VersionUpdateModal onRelogin={reloginForNewVersion} /> : null;
+
   if (!auth) {
-    return <LoginScreen games={games} onLogin={setAuth} />;
+    return <><LoginScreen games={games} onLogin={setAuth} />{versionModal}</>;
   }
 
   if (!session) {
-    return <GameSelectScreen auth={auth} games={games} onEnter={setSession} onLogout={logout} />;
+    return <><GameSelectScreen auth={auth} games={games} onEnter={setSession} onLogout={logout} />{versionModal}</>;
   }
 
   const moduleConfig = modules[active];
@@ -657,11 +702,12 @@ function App() {
   };
 
   return (
+    <>
     <main className="app-shell">
       <aside className="sidebar">
         <div className="brand">
           <div className="brand-mark">T</div>
-          GM
+          <span className="brand-title">TOUKA GM</span>
         </div>
         <nav className="nav">
           {navGroups.map((group) => (
@@ -730,6 +776,23 @@ function App() {
       {auth.isAdmin && gamePanelOpen && <GamePanel games={games} onAdd={createGame} onDelete={deleteGame} onUpdate={updateGame} onClose={() => setGamePanelOpen(false)} />}
       {auth.isAdmin && logPanelOpen && <UserLogPanel onClose={() => setLogPanelOpen(false)} />}
     </main>
+    {versionModal}
+    </>
+  );
+}
+
+function VersionUpdateModal({ onRelogin }: { onRelogin: () => void }) {
+  return (
+    <div className="modal-backdrop version-update-backdrop" role="presentation">
+      <section className="version-update-modal" role="dialog" aria-modal="true" aria-labelledby="version-update-title">
+        <div className="version-update-icon"><ShieldCheck size={26} /></div>
+        <div>
+          <h2 id="version-update-title">后台已更新</h2>
+          <p>检测到当前GM后台有新版本，请重新登录后继续操作。</p>
+        </div>
+        <button className="primary-button" onClick={onRelogin} type="button"><LogOut size={16} />重新登录</button>
+      </section>
+    </div>
   );
 }
 
@@ -1332,6 +1395,7 @@ function MailSuitePage({ active, postWithToken, setActive }: { active: MailSecti
   const [templates, setTemplates] = React.useState<MailTemplate[]>([]);
   const [rewardTemplates, setRewardTemplates] = React.useState<RewardTemplate[]>([]);
   const [mailRows, setMailRows] = React.useState<Record<string, unknown>[]>([]);
+  const [localMailRows, setLocalMailRows] = React.useState<Record<string, unknown>[]>([]);
   const [view, setView] = React.useState<"list" | "edit">("list");
   const [recordTab, setRecordTab] = React.useState<"mail" | "claim">("mail");
   const [userIdQuery, setUserIdQuery] = React.useState("");
@@ -1428,11 +1492,22 @@ function MailSuitePage({ active, postWithToken, setActive }: { active: MailSecti
             throw new Error(`邮件提交失败：${error}`);
           }
           const data = getApiData(result.payload);
+          const submitted = getObject(body) ?? {};
+          const localRow = {
+            ...submitted,
+            ...(data ?? {}),
+            Id: String(data?.Id ?? submitted.Id ?? `local-${Date.now()}`),
+            RegtEnd: data?.RegtEnd ?? submitted.Regt,
+            CreateTime: data?.CreateTime ?? Math.floor(Date.now() / 1000),
+            __local: !data?.Id,
+            __claimed: false,
+          };
           const message = `邮件已提交到服务器${data?.Id ? `，ID：${String(data.Id)}` : ""}`;
           setStatus(message);
           const submittedTyp = Number(getObject(body)?.Typ);
           const submittedTargets = getArray(getObject(body)?.TargetID);
           setView("list");
+          setLocalMailRows((current) => [localRow, ...current.filter((row) => String(row.Id) !== String(localRow.Id))].slice(0, 20));
           await refreshMailList();
           if ((submittedTyp === 2 || (submittedTyp === 1 && submittedTargets.length === 0)) && active !== "mailGlobal") {
             setActive("mailGlobal");
@@ -1451,6 +1526,7 @@ function MailSuitePage({ active, postWithToken, setActive }: { active: MailSecti
     <MailListPage
       active={active}
       mailRows={mailRows}
+      localMailRows={localMailRows}
       recordTab={recordTab}
       setRecordTab={setRecordTab}
       status={status}
@@ -1461,6 +1537,7 @@ function MailSuitePage({ active, postWithToken, setActive }: { active: MailSecti
         const result = await postWithToken("/gmMailDel", { Id: id });
         const error = apiBusinessError(result);
         setStatus(error ? `删除失败：${error}` : "邮件已删除");
+        if (!error) setLocalMailRows((current) => current.filter((row) => String(row.Id) !== id));
         await refreshMailList();
       }}
       onRefresh={() => void refreshMailList()}
@@ -1468,9 +1545,10 @@ function MailSuitePage({ active, postWithToken, setActive }: { active: MailSecti
   );
 }
 
-function MailListPage({ active, mailRows, onCreate, onDelete, onRefresh, recordTab, setRecordTab, setUserIdQuery, status, userIdQuery }: { active: MailSectionKey; mailRows: Record<string, unknown>[]; onCreate: () => void; onDelete: (id: string) => Promise<void>; onRefresh: () => void; recordTab: "mail" | "claim"; setRecordTab: (tab: "mail" | "claim") => void; setUserIdQuery: (value: string) => void; status: string; userIdQuery: string }) {
+function MailListPage({ active, localMailRows, mailRows, onCreate, onDelete, onRefresh, recordTab, setRecordTab, setUserIdQuery, status, userIdQuery }: { active: MailSectionKey; localMailRows: Record<string, unknown>[]; mailRows: Record<string, unknown>[]; onCreate: () => void; onDelete: (id: string) => Promise<void>; onRefresh: () => void; recordTab: "mail" | "claim"; setRecordTab: (tab: "mail" | "claim") => void; setUserIdQuery: (value: string) => void; status: string; userIdQuery: string }) {
   const global = active === "mailGlobal";
-  const rows = mailRows.filter((row) => {
+  const mergedRows = [...localMailRows, ...mailRows.filter((row) => !localMailRows.some((localRow) => String(localRow.Id) === String(row.Id)))];
+  const rows = mergedRows.filter((row) => {
     const targetIds = getArray(row.TargetID);
     const typ = Number(row.Typ);
     const isServerMail = typ === 2;
@@ -1495,7 +1573,7 @@ function MailListPage({ active, mailRows, onCreate, onDelete, onRefresh, recordT
   return (
     <section className="mail-page">
       {global && <div className="mail-tabs"><button className="active" type="button">全局邮件</button><button onClick={() => setRecordTab("claim")} type="button">领取记录</button></div>}
-      <div className="mail-filter-line"><label>用户 ID：<input value={userIdQuery} onChange={(event) => setUserIdQuery(event.target.value)} /></label><button onClick={onRefresh} type="button"><Search size={14} />Search</button></div>
+      {!global && <div className="mail-filter-line"><label>用户 ID：<input value={userIdQuery} onChange={(event) => setUserIdQuery(event.target.value)} /></label><button onClick={onRefresh} type="button"><Search size={14} />Search</button></div>}
       <section className="mail-table-card">
         <button className="mail-primary-button" onClick={onCreate} type="button">新<Plus size={18} /></button>
         <MailDataTable
@@ -1509,7 +1587,7 @@ function MailListPage({ active, mailRows, onCreate, onDelete, onRefresh, recordT
             const typeName = isServerMail ? "区服" : typ === 3 || (!typ && targetIds.length > 0) ? "个人" : "全局";
             const title = formatCell(row.Titel ?? row.Title ?? "自定义邮件");
             const state = Number(row.St);
-            const statusText = state > 0 ? `状态 ${state}` : "已发送";
+            const statusText = row.__claimed ? "已领取" : state > 0 ? `状态 ${state}` : "未领取";
             const createdAt = formatCell(row.CreateTime ?? row.CreatedAt ?? row.Ct ?? row.createdAt);
             const regEnd = row.RegtEnd ?? row.Regt;
             return {
@@ -1517,7 +1595,7 @@ function MailListPage({ active, mailRows, onCreate, onDelete, onRefresh, recordT
               模板名称: title,
               "用户 ID": target,
               状态: statusText,
-              时间: <span className="mail-time-cell"><span>注册开始: {formatTimestamp(row.RegtBegin)}</span><span>注册结束: {formatTimestamp(regEnd)}</span><span>过期时间: {formatTimestamp(row.Et)}</span><span>创建时间: {createdAt === "暂无数据" ? "接口未返回" : createdAt}</span></span>,
+              时间: <span className="mail-time-cell"><span>注册开始: {formatTimestamp(row.RegtBegin)}</span><span>注册结束: {formatTimestamp(regEnd)}</span><span>过期时间: {formatTimestamp(row.Et)}</span><span>创建时间: {formatTimestampValue(createdAt)}</span></span>,
               操作: <div className="mail-action-buttons"><button onClick={() => void onDelete(id)} type="button">撤回</button></div>,
             };
           })}
@@ -1550,7 +1628,7 @@ function MailEditor({ global, items, onBack, onSubmit, onUploadItemTable, reward
   const [startTime, setStartTime] = React.useState(toDatetimeLocal(now));
   const [endTime, setEndTime] = React.useState(MAIL_DEFAULT_EXPIRE);
   const [testUser, setTestUser] = React.useState("");
-  const [filterRows, setFilterRows] = React.useState<Array<{ id: number; field: string; op: string; value: string }>>([{ id: Date.now(), field: "system", op: "=", value: "" }]);
+  const [filterRows, setFilterRows] = React.useState<Array<{ id: number; field: string; op: string; value: string }>>([]);
   const [error, setError] = React.useState("");
   const [submitting, setSubmitting] = React.useState(false);
   const isGlobalMail = mailType === "global";
@@ -1580,7 +1658,7 @@ function MailEditor({ global, items, onBack, onSubmit, onUploadItemTable, reward
 
   React.useEffect(() => {
     if (rewardTemplateId !== "custom" && selectedRewardTemplate) {
-      setRewards(selectedRewardTemplate.items);
+      setRewards(selectedRewardTemplate.items.length ? selectedRewardTemplate.items : [{ itemId: "", count: "0" }]);
     }
   }, [rewardTemplateId, selectedRewardTemplate]);
 
@@ -1617,6 +1695,10 @@ function MailEditor({ global, items, onBack, onSubmit, onUploadItemTable, reward
     }
     if (regBeginSeconds && regEndSeconds && regEndSeconds <= regBeginSeconds) {
       setError("注册结束时间必须晚于注册开始时间");
+      return;
+    }
+    if (isGlobalMail && filterRows.some((row) => row.field !== "regTime" && row.op !== "=" && row.value.trim())) {
+      setError("当前邮件接口只支持系统、版本、游戏内区服的等于条件，范围和排除条件暂不支持保存");
       return;
     }
     if (isGlobalMail && filterRows.some((row) => row.field === "server" && row.value.trim()) && !serverTargetIds.length) {
@@ -1663,8 +1745,10 @@ function MailEditor({ global, items, onBack, onSubmit, onUploadItemTable, reward
           {isGlobalMail && <div className="mail-form-row mail-filter-builder">
             <span>条件</span>
             <div className="mail-condition-list">
+              {filterRows.length === 0 && <div className="mail-condition-empty">默认无条件，邮件会发给当前类型下的全部目标。</div>}
               {filterRows.map((row) => {
                 const unsupported = row.field === "language" || row.field === "country";
+                const comparisonOps = row.field === "version" || row.field === "server";
                 return (
                   <div className="mail-condition-row" key={row.id}>
                     <select value={row.field} onChange={(event) => {
@@ -1674,13 +1758,15 @@ function MailEditor({ global, items, onBack, onSubmit, onUploadItemTable, reward
                     }}>
                       {filterFieldOptions.map((option) => <option disabled={option.disabled} key={option.value} value={option.value}>{option.label}</option>)}
                     </select>
-                    {row.field === "regTime" ? (
+                    {row.field === "regTime" || comparisonOps ? (
                       <select className="mail-condition-expression" value={row.op} onChange={(event) => {
                         const nextOp = event.target.value;
                         setFilterRows((current) => current.map((item) => item.id === row.id ? { ...item, op: nextOp, value: item.value || defaultFilterValue(item.field, nextOp) } : item));
                       }}>
+                        {comparisonOps && <option value="=">=</option>}
                         <option value=">=">&gt;=</option>
                         <option value="<=">&lt;=</option>
+                        {comparisonOps && <option value="!=">!=</option>}
                       </select>
                     ) : (
                       <div className="mail-condition-op" role="group" aria-label="条件操作">
@@ -1699,11 +1785,11 @@ function MailEditor({ global, items, onBack, onSubmit, onUploadItemTable, reward
                     ) : (
                       <input disabled={unsupported} value={row.value} onChange={(event) => setFilterRows((current) => current.map((item) => item.id === row.id ? { ...item, value: event.target.value } : item))} placeholder={unsupported ? "当前接口暂未开放" : row.field === "version" ? "例如 1.8.1 或 10800" : row.field === "server" ? "例如 12 或 1,2" : "例如 1,2"} />
                     )}
-                    <button className="mail-condition-remove" onClick={() => setFilterRows((current) => current.length > 1 ? current.filter((item) => item.id !== row.id) : current)} type="button">删除</button>
+                    <button className="mail-condition-remove" onClick={() => setFilterRows((current) => current.filter((item) => item.id !== row.id))} type="button">删除</button>
                   </div>
                 );
               })}
-              <button className="mail-add-condition" onClick={() => setFilterRows((current) => [...current, { id: Date.now() + current.length, field: "version", op: "=", value: "" }])} type="button">新增</button>
+              <button className="mail-add-condition" onClick={() => setFilterRows((current) => [...current, { id: Date.now() + current.length, field: "version", op: "=", value: "" }])} type="button">新增条件</button>
               <small className="mail-condition-hint">填写“游戏内区服”后，会按接口 Typ=2 将 TargetID 作为区服ID发送。</small>
             </div>
           </div>}
@@ -1742,7 +1828,7 @@ function RewardRows({ items, onUploadItemTable, rewards, setRewards }: { items: 
           <button className="mail-delete-reward" onClick={() => deleteReward(index)} title="删除奖励" type="button">删除</button>
         </div>
       ))}
-      <div className="mail-form-row mail-add-reward-row"><span /><button className="mail-add-reward" onClick={() => setRewards([...rewards, { itemId: "", count: "0" }])} type="button">＋</button></div>
+      <div className="mail-form-row mail-add-reward-row"><span /><button className="mail-add-reward" onClick={() => setRewards([...rewards, { itemId: "", count: "0" }])} type="button">新增</button></div>
       <div className="mail-form-row"><span /><label className={`mail-upload-link ${uploading ? "disabled" : ""}`}>{uploading ? "上传中..." : "上传Item表"}<input accept=".xlsx,.xls" disabled={uploading} onChange={(event) => {
         const file = event.target.files?.[0];
         event.currentTarget.value = "";
@@ -1820,6 +1906,9 @@ function MailTemplateEditor({ onBack, onSaved, template }: { onBack: () => void;
       for (const language of mailLanguages) {
         initial[language] = { title: template.contents[language]?.title ?? "", body: template.contents[language]?.body ?? "" };
       }
+      if (!initial[defaultMailLanguage].title && !initial[defaultMailLanguage].body) {
+        initial[defaultMailLanguage] = { title: template.title ?? "", body: template.body ?? "" };
+      }
     } else {
       initial[defaultMailLanguage] = { title: template?.title ?? "", body: template?.body ?? "" };
     }
@@ -1836,14 +1925,26 @@ function MailTemplateEditor({ onBack, onSaved, template }: { onBack: () => void;
       setError("请输入模板名称");
       return;
     }
-    const hasContent = Object.values(contents).some((content) => content.title.trim() || content.body.trim());
+    const hasContent = Object.values(contents).some((content) => content.title.trim() && content.body.trim());
     if (!hasContent) {
-      setError("请至少填写一个语言的邮件标题或邮件内容");
+      setError("请至少填写一个语言的邮件标题和邮件内容");
+      return;
+    }
+    const incompleteLanguage = mailLanguages.find((language) => {
+      const content = contents[language];
+      const hasTitle = Boolean(content?.title.trim());
+      const hasBody = Boolean(content?.body.trim());
+      return hasTitle !== hasBody;
+    });
+    if (incompleteLanguage) {
+      setError(`${incompleteLanguage} 的邮件标题和邮件内容需要同时填写`);
       return;
     }
     setError("");
     setSaving(true);
-    const mainContent = contents[defaultMailLanguage] ?? { title: "", body: "" };
+    const mainContent = contents[defaultMailLanguage]?.title.trim() && contents[defaultMailLanguage]?.body.trim()
+      ? contents[defaultMailLanguage]
+      : Object.values(contents).find((content) => content.title.trim() && content.body.trim()) ?? { title: "", body: "" };
     try {
       const response = await fetch("/local-api/mail-templates", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ id: template?.id, name: cleanName, title: mainContent.title, body: mainContent.body, contents }) });
       if (!response.ok) throw new Error(`HTTP ${response.status}`);
@@ -2030,7 +2131,7 @@ function RewardTemplateEditor({ items, onBack, onSaved, onUploadItemTable, templ
     setError("");
     setSaving(true);
     try {
-      const response = await fetch("/local-api/reward-templates", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ id: template?.id, title: cleanTitle, items: rewards }) });
+      const response = await fetch("/local-api/reward-templates", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ id: template?.id, title: cleanTitle, items: filledRewards(rewards) }) });
       if (!response.ok) throw new Error(`HTTP ${response.status}`);
       onSaved();
     } catch (saveError) {
@@ -2060,10 +2161,23 @@ function formatUtc(value: string) {
   return seconds ? new Date(seconds * 1000).toISOString().slice(0, 16).replace("T", " ") : "";
 }
 
+function formatTimestampValue(value: unknown) {
+  if (typeof value === "string" && /^\d{4}-\d{2}-\d{2}/.test(value)) return value.replace("T", " ").slice(0, 16);
+  return formatTimestamp(value);
+}
+
 function formatTimestamp(value: unknown) {
   const number = Number(value);
   if (!Number.isFinite(number) || number <= 0) return "暂无数据";
-  return new Date(number * 1000).toISOString().slice(0, 16).replace("T", " ");
+  return new Date(number * 1000).toLocaleString("zh-CN", {
+    timeZone: "Asia/Shanghai",
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+    hour12: false,
+  }).replace(/\//g, "-");
 }
 
 function secondsToDatetimeLocal(value: unknown) {

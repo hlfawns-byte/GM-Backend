@@ -71,8 +71,22 @@ function writeGames(games) {
 }
 
 function sendJson(res, status, data) {
-  res.writeHead(status, { "Content-Type": "application/json; charset=utf-8" });
+  res.writeHead(status, { "Content-Type": "application/json; charset=utf-8", "Cache-Control": "no-store" });
   res.end(JSON.stringify(data));
+}
+
+function appVersionPayload() {
+  const packageJson = readJson(path.join(__dirname, "package.json"), {});
+  const version = String(packageJson.version ?? "0.0.0");
+  const distIndex = path.join(distDir, "index.html");
+  const serverFile = fileURLToPath(import.meta.url);
+  const distMtime = fs.existsSync(distIndex) ? fs.statSync(distIndex).mtimeMs : 0;
+  const serverMtime = fs.existsSync(serverFile) ? fs.statSync(serverFile).mtimeMs : 0;
+  return {
+    version,
+    build: `${version}-${Math.max(distMtime, serverMtime)}`,
+    portal,
+  };
 }
 
 function readBody(req) {
@@ -202,6 +216,11 @@ function parseItemWorkbook(file) {
 }
 
 async function handleLocalApi(req, res, pathname) {
+  if (pathname === "/local-api/app-version" && req.method === "GET") {
+    sendJson(res, 200, appVersionPayload());
+    return true;
+  }
+
   if (pathname === "/local-api/accounts" && req.method === "GET") {
     sendJson(res, 200, { accounts: readAccounts().map(({ password, ...account }) => account) });
     return true;

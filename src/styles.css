@@ -50,12 +50,19 @@ button {
   padding: 0 28px;
   color: #fff;
   border-bottom: 1px solid rgb(255 255 255 / 6%);
-  letter-spacing: 8px;
-  font-size: 26px;
+  overflow: hidden;
+  letter-spacing: 0;
+  font-size: 24px;
   font-weight: 800;
 }
 
+.brand-title {
+  min-width: 0;
+  white-space: nowrap;
+}
+
 .brand-mark {
+  flex: 0 0 36px;
   display: grid;
   place-items: center;
   width: 36px;
@@ -1907,18 +1914,28 @@ tbody tr:hover,
 .mail-condition-list {
   display: grid;
   gap: 14px;
-  width: min(860px, 100%);
-  max-width: calc(100vw - 430px);
+  width: min(980px, 100%);
+  max-width: calc(100vw - 390px);
 }
 
 .mail-condition-row {
   display: grid;
-  grid-template-columns: minmax(150px, 190px) 140px minmax(260px, 1fr) 64px;
+  grid-template-columns: minmax(150px, 180px) 112px minmax(300px, 1fr) 72px;
   align-items: center;
-  gap: 18px;
+  gap: 14px;
   min-height: 76px;
   padding: 16px 20px;
   background: #f7f7f7;
+}
+
+.mail-condition-empty {
+  width: min(640px, 100%);
+  border: 1px dashed #d7e0eb;
+  border-radius: 4px;
+  padding: 14px 16px;
+  color: #7a8798;
+  background: #fbfcfe;
+  font-size: 13px;
 }
 
 .mail-condition-row input,
@@ -1969,7 +1986,7 @@ tbody tr:hover,
 }
 
 .mail-condition-remove {
-  width: 64px;
+  width: 72px;
   height: 36px;
   border: 1px solid #ffd0c9;
   border-radius: 4px;
@@ -1999,7 +2016,7 @@ tbody tr:hover,
   }
 
   .mail-condition-row {
-    grid-template-columns: minmax(130px, 1fr) 132px minmax(180px, 1.5fr) 62px;
+    grid-template-columns: minmax(130px, 1fr) 104px minmax(180px, 1.5fr) 70px;
   }
 }
 
@@ -2064,15 +2081,15 @@ tbody tr:hover,
 .mail-add-reward {
   display: grid;
   place-items: center;
-  width: 24px;
-  height: 24px;
+  min-width: 84px;
+  height: 30px;
   border: 1px solid #6f7d91;
-  border-radius: 50%;
-  padding: 0;
+  border-radius: 4px;
+  padding: 0 12px;
   color: #4f5e72;
   background: #fff;
-  font-size: 18px;
-  line-height: 0;
+  font-size: 13px;
+  line-height: 1;
 }
 
 .mail-add-reward-row {
@@ -2187,6 +2204,52 @@ tbody tr:hover,
   border-radius: 7px;
   background: #fff;
   box-shadow: 0 24px 80px rgb(12 20 34 / 28%);
+}
+
+.version-update-backdrop {
+  z-index: 80;
+  background: rgb(13 18 28 / 58%);
+}
+
+.version-update-modal {
+  display: grid;
+  grid-template-columns: 52px 1fr;
+  gap: 14px 16px;
+  width: min(460px, calc(100vw - 32px));
+  border: 1px solid #dfe7f0;
+  border-radius: 8px;
+  padding: 24px;
+  background: #fff;
+  box-shadow: 0 24px 80px rgb(12 20 34 / 32%);
+}
+
+.version-update-icon {
+  display: grid;
+  place-items: center;
+  width: 52px;
+  height: 52px;
+  border-radius: 8px;
+  color: #1d6fd8;
+  background: #eef6ff;
+}
+
+.version-update-modal h2 {
+  margin: 0 0 8px;
+  color: #263548;
+  font-size: 20px;
+}
+
+.version-update-modal p {
+  margin: 0;
+  color: #647386;
+  font-size: 14px;
+  line-height: 1.7;
+}
+
+.version-update-modal button {
+  grid-column: 1 / -1;
+  justify-self: end;
+  min-width: 118px;
 }
 
 .login-page {
