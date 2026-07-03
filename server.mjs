@@ -296,6 +296,15 @@ async function handleLocalApi(req, res, pathname) {
     return true;
   }
 
+  const mailTemplateMatch = pathname.match(/^\/local-api\/mail-templates\/([^/]+)$/);
+  if (mailTemplateMatch && req.method === "DELETE") {
+    const id = decodeURIComponent(mailTemplateMatch[1]);
+    const templates = readJson(files.mailTemplates, []);
+    writeJson(files.mailTemplates, (Array.isArray(templates) ? templates : []).filter((template) => String(template.id) !== id));
+    sendJson(res, 200, { Result: 0, id });
+    return true;
+  }
+
   if (pathname === "/local-api/reward-templates" && req.method === "GET") {
     sendJson(res, 200, { templates: readJson(files.rewardTemplates, []) });
     return true;
@@ -306,9 +315,19 @@ async function handleLocalApi(req, res, pathname) {
     const templates = readJson(files.rewardTemplates, []);
     const now = new Date().toISOString().slice(0, 19).replace("T", " ");
     const id = String(body.id ?? `r-${Date.now()}`);
-    const next = { id, title: String(body.title ?? "未命名奖励模板"), items: Array.isArray(body.items) ? body.items : [], createdAt: now, updatedAt: now };
+    const existing = Array.isArray(templates) ? templates.find((template) => template.id === id) : null;
+    const next = { id, title: String(body.title ?? "未命名奖励模板"), items: Array.isArray(body.items) ? body.items : [], createdAt: String(existing?.createdAt ?? now), updatedAt: now };
     writeJson(files.rewardTemplates, [next, ...(Array.isArray(templates) ? templates : []).filter((template) => template.id !== id)]);
     sendJson(res, 200, { template: next });
+    return true;
+  }
+
+  const rewardTemplateMatch = pathname.match(/^\/local-api\/reward-templates\/([^/]+)$/);
+  if (rewardTemplateMatch && req.method === "DELETE") {
+    const id = decodeURIComponent(rewardTemplateMatch[1]);
+    const templates = readJson(files.rewardTemplates, []);
+    writeJson(files.rewardTemplates, (Array.isArray(templates) ? templates : []).filter((template) => String(template.id) !== id));
+    sendJson(res, 200, { Result: 0, id });
     return true;
   }
 
@@ -479,6 +498,34 @@ async function handleLocalApi(req, res, pathname) {
       sendJson(res, 200, { token, adminAccount: credentials.account });
     } catch (error) {
       sendJson(res, 401, { error: error instanceof Error ? error.message : "获取 Token 失败" });
+    }
+    return true;
+  }
+
+  if (pathname === "/local-api/gm-post" && req.method === "POST") {
+    const body = await readJsonBody(req);
+    const endpoint = String(body.endpoint ?? "");
+    const token = String(body.token ?? "");
+    if (!endpoint.startsWith("/")) {
+      sendJson(res, 400, { error: "接口地址不正确" });
+      return true;
+    }
+    if (!token) {
+      sendJson(res, 401, { error: "Token 为空，请重新进入区服" });
+      return true;
+    }
+    try {
+      const apiBase = gmApiBase(body.serverUrl);
+      const upstream = await fetch(`${apiBase}${endpoint}`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json", Token: token },
+        body: JSON.stringify(body.body ?? {}),
+      });
+      const text = await upstream.text();
+      res.writeHead(upstream.status, { "Content-Type": upstream.headers.get("content-type") || "application/json; charset=utf-8" });
+      res.end(text);
+    } catch (error) {
+      sendJson(res, 502, { error: error instanceof Error ? error.message : "游戏服务器连接失败" });
     }
     return true;
   }

@@ -411,6 +411,15 @@ function localAccountPlugin() {
           return;
         }
 
+        const mailTemplateMatch = url.match(/^\/local-api\/mail-templates\/([^/]+)$/);
+        if (mailTemplateMatch && req.method === "DELETE") {
+          const id = decodeURIComponent(mailTemplateMatch[1]);
+          const templates = readJsonFile<Record<string, unknown>[]>(mailTemplatesFile, []);
+          writeJsonFile(mailTemplatesFile, templates.filter((template) => String(template.id) !== id));
+          sendJson(res, 200, { Result: 0, id });
+          return;
+        }
+
         if (url === "/local-api/reward-templates" && req.method === "GET") {
           sendJson(res, 200, { templates: readJsonFile(rewardTemplatesFile, []) });
           return;
@@ -424,6 +433,15 @@ function localAccountPlugin() {
           const next = { id, title: String(body.title ?? "未命名奖励模板"), items: Array.isArray(body.items) ? body.items : [], createdAt: now, updatedAt: now };
           writeJsonFile(rewardTemplatesFile, [next, ...templates.filter((template) => template.id !== id)]);
           sendJson(res, 200, { template: next });
+          return;
+        }
+
+        const rewardTemplateMatch = url.match(/^\/local-api\/reward-templates\/([^/]+)$/);
+        if (rewardTemplateMatch && req.method === "DELETE") {
+          const id = decodeURIComponent(rewardTemplateMatch[1]);
+          const templates = readJsonFile<Record<string, unknown>[]>(rewardTemplatesFile, []);
+          writeJsonFile(rewardTemplatesFile, templates.filter((template) => String(template.id) !== id));
+          sendJson(res, 200, { Result: 0, id });
           return;
         }
 
@@ -602,6 +620,35 @@ function localAccountPlugin() {
             sendJson(res, 200, { token, adminAccount: credentials.account });
           } catch (error) {
             sendJson(res, 401, { error: error instanceof Error ? error.message : "获取 Token 失败" });
+          }
+          return;
+        }
+
+        if (url === "/local-api/gm-post" && req.method === "POST") {
+          const body = await readJsonBody(req);
+          const endpoint = String(body.endpoint ?? "");
+          const token = String(body.token ?? "");
+          if (!endpoint.startsWith("/")) {
+            sendJson(res, 400, { error: "接口地址不正确" });
+            return;
+          }
+          if (!token) {
+            sendJson(res, 401, { error: "Token 为空，请重新进入区服" });
+            return;
+          }
+          try {
+            const apiBase = gmApiBase(String(body.serverUrl ?? ""));
+            const upstream = await fetch(`${apiBase}${endpoint}`, {
+              method: "POST",
+              headers: { "Content-Type": "application/json", Token: token },
+              body: JSON.stringify(body.body ?? {}),
+            });
+            const text = await upstream.text();
+            res.statusCode = upstream.status;
+            res.setHeader("Content-Type", upstream.headers.get("content-type") || "application/json; charset=utf-8");
+            res.end(text);
+          } catch (error) {
+            sendJson(res, 502, { error: error instanceof Error ? error.message : "游戏服务器连接失败" });
           }
           return;
         }
