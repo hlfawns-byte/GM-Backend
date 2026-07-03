@@ -220,8 +220,11 @@ function validateRewardRows(rewards: MailRewardItem[], items: ItemOption[]) {
 }
 
 const MAIL_DEFAULT_REG_BEGIN = "2020-01-01T00:00";
-const MAIL_DEFAULT_REG_END = "2050-12-31T23:59";
 const MAIL_DEFAULT_EXPIRE = "2050-12-31T23:59";
+
+function defaultRegEndTime() {
+  return toDatetimeLocal(new Date());
+}
 
 const mailLanguages = ["中文(简体)", "中文(繁体)", "英文", "韩文", "日文", "德语", "法语", "西班牙语", "葡萄牙语", "俄语", "意大利语", "印尼语", "泰语", "越南语"];
 const defaultMailLanguage = mailLanguages[0];
@@ -1299,7 +1302,7 @@ function SilencePage({ operator }: { operator: string }) {
     if (!ids.length) return;
     const now = new Date().toISOString().slice(0, 19).replace("T", " ");
     setRecords((current) => [
-      ...ids.map((userId) => ({ id: Date.now() + Number(userId.slice(-4) || 0), userId, until: type === "mute" ? formatUtc(until) : "已解禁", status: type === "mute" ? "禁言" : "解禁", createdAt: now, operator })),
+      ...ids.map((userId) => ({ id: Date.now() + Number(userId.slice(-4) || 0), userId, until: type === "mute" ? formatBeijingTime(until) : "已解禁", status: type === "mute" ? "禁言" : "解禁", createdAt: now, operator })),
       ...current,
     ]);
     if (type === "mute") setMuteUserIds("");
@@ -1315,7 +1318,7 @@ function SilencePage({ operator }: { operator: string }) {
         <div className="silence-card">
           <section className="ban-form-block">
             <div className="ban-row"><span className="ban-label">禁赛类型：</span>{silenceTypes.map((item) => <label className="ban-radio" key={item}><input checked={muteTypes.includes(item)} onChange={() => toggleType(item, muteTypes, setMuteTypes)} type="checkbox" />{item}</label>)}</div>
-            <label className="ban-days-row"><span className="ban-label">禁赛到：</span><input type="datetime-local" value={until} onChange={(event) => setUntil(event.target.value)} /><span>UTC:{new Date(until).toISOString()}</span></label>
+            <label className="ban-days-row"><span className="ban-label">禁赛到：</span><input type="datetime-local" value={until} onChange={(event) => setUntil(event.target.value)} /><span>北京时间：{formatBeijingTime(until)}</span></label>
             <label className="ban-textarea-label"><span>用户ID：</span><textarea value={muteUserIds} onChange={(event) => setMuteUserIds(event.target.value)} placeholder="请输入用户ID，一行一个用户ID" /></label>
             <div className="ban-actions"><button onClick={() => addRecords("mute")} type="button">禁赛</button><button onClick={() => setMuteUserIds("")} type="button">取消</button></div>
           </section>
@@ -1633,7 +1636,7 @@ function MailEditor({ global, items, onBack, onSubmit, onUploadItemTable, reward
   const [submitting, setSubmitting] = React.useState(false);
   const isGlobalMail = mailType === "global";
   const defaultFilterValue = (field: string, op = "=") => {
-    if (field === "regTime") return op === "<=" ? MAIL_DEFAULT_REG_END : MAIL_DEFAULT_REG_BEGIN;
+    if (field === "regTime") return op === "<=" ? defaultRegEndTime() : MAIL_DEFAULT_REG_BEGIN;
     return "";
   };
   const filterFieldOptions = [
@@ -1688,7 +1691,7 @@ function MailEditor({ global, items, onBack, onSubmit, onUploadItemTable, reward
     const regBeginValues = isGlobalMail ? filterRows.filter((row) => row.field === "regTime" && row.op === ">=" && row.value).map((row) => parseDatetimeLocalSeconds(row.value)) : [];
     const regEndValues = isGlobalMail ? filterRows.filter((row) => row.field === "regTime" && row.op === "<=" && row.value).map((row) => parseDatetimeLocalSeconds(row.value)) : [];
     const regBeginSeconds = regBeginValues[0] ?? parseDatetimeLocalSeconds(MAIL_DEFAULT_REG_BEGIN);
-    const regEndSeconds = regEndValues[0] ?? parseDatetimeLocalSeconds(MAIL_DEFAULT_REG_END);
+    const regEndSeconds = regEndValues[0] ?? parseDatetimeLocalSeconds(defaultRegEndTime());
     if (regBeginValues.some((value) => !value) || regEndValues.some((value) => !value)) {
       setError("请选择有效的注册时间区间");
       return;
@@ -1800,7 +1803,7 @@ function MailEditor({ global, items, onBack, onSubmit, onUploadItemTable, reward
           <label className="mail-form-row"><span>邮件标题</span><input value={title} onChange={(event) => setTitle(event.target.value)} /></label>
           <label className="mail-form-row mail-textarea-row"><span>邮件内容</span><textarea value={body} onChange={(event) => setBody(event.target.value)} /></label>
           <label className="mail-form-row"><span>生效时间</span><input disabled type="datetime-local" value={startTime} onChange={(event) => setStartTime(event.target.value)} /><em>立即生效，当前接口暂不支持定时</em></label>
-          <label className="mail-form-row"><span>过期时间</span><input type="datetime-local" value={endTime} onChange={(event) => setEndTime(event.target.value)} /><em>UTC {formatUtc(endTime)}</em></label>
+          <label className="mail-form-row"><span>过期时间</span><input type="datetime-local" value={endTime} onChange={(event) => setEndTime(event.target.value)} /><em>北京时间 {formatBeijingTime(endTime)}</em></label>
           {error && <div className="mail-form-error">{error}</div>}
           <div className="mail-form-actions"><button disabled={submitting} onClick={() => void submit()} type="button">{submitting ? "保存中..." : "保存"}</button><button disabled={submitting} onClick={onBack} type="button">取消</button></div>
         </div>
@@ -1892,7 +1895,7 @@ function templateLanguageSummary(template: MailTemplate) {
 
 function MailTemplateList({ onCreate, onDelete, onEdit, query, setQuery, templates }: { onCreate: () => void; onDelete: (template: MailTemplate) => Promise<void>; onEdit: (template: MailTemplate) => void; query: string; setQuery: (value: string) => void; templates: MailTemplate[] }) {
   const rows = templates.filter((template) => !query.trim() || template.name.includes(query.trim()));
-  return <section className="mail-page"><div className="mail-filter-line"><label>模板名称：<input value={query} onChange={(event) => setQuery(event.target.value)} /></label><button type="button"><Search size={14} />Search</button></div><section className="mail-table-card"><button className="mail-primary-button" onClick={onCreate} type="button">新建</button><MailDataTable columns={["ID", "名称", "语言", "创建时间", "更新时间", "操作"]} rows={rows.map((template) => ({ ID: template.id, 名称: template.name, 语言: templateLanguageSummary(template), 创建时间: template.createdAt, 更新时间: template.updatedAt, 操作: <div className="mail-action-buttons"><button onClick={() => onEdit(template)} type="button">编辑</button><button onClick={() => void onDelete(template)} type="button">删除</button></div> }))} /></section></section>;
+  return <section className="mail-page"><div className="mail-filter-line"><label>模板名称：<input value={query} onChange={(event) => setQuery(event.target.value)} /></label><button type="button"><Search size={14} />Search</button></div><section className="mail-table-card"><button className="mail-primary-button" onClick={onCreate} type="button">新建</button><MailDataTable columns={["ID", "名称", "语言", "创建时间", "更新时间", "操作"]} rows={rows.map((template) => ({ ID: template.id, 名称: template.name, 语言: templateLanguageSummary(template), 创建时间: formatTimestampValue(template.createdAt), 更新时间: formatTimestampValue(template.updatedAt), 操作: <div className="mail-action-buttons"><button onClick={() => onEdit(template)} type="button">编辑</button><button onClick={() => void onDelete(template)} type="button">删除</button></div> }))} /></section></section>;
 }
 
 function MailTemplateEditor({ onBack, onSaved, template }: { onBack: () => void; onSaved: () => void; template?: MailTemplate }) {
@@ -2083,8 +2086,8 @@ function GiftEditor({ items, onBack, onSubmit }: { items: ItemOption[]; onBack: 
         <label className="gift-form-row"><span>总兑换数</span><input value={maxCount} onChange={(event) => setMaxCount(event.target.value)} /></label>
         <label className="gift-form-row gift-check-row"><span>是否启用</span><input checked={enabled} onChange={(event) => setEnabled(event.target.checked)} type="checkbox" /></label>
         <RewardRows items={items} onUploadItemTable={async () => undefined} rewards={rewards} setRewards={setRewards} />
-        <label className="gift-form-row"><span>生效时间</span><input type="datetime-local" value={startTime} onChange={(event) => setStartTime(event.target.value)} /><em>UTC {formatUtc(startTime)}</em></label>
-        <label className="gift-form-row"><span>过期时间</span><input type="datetime-local" value={endTime} onChange={(event) => setEndTime(event.target.value)} /><em>UTC {formatUtc(endTime)}</em></label>
+        <label className="gift-form-row"><span>生效时间</span><input type="datetime-local" value={startTime} onChange={(event) => setStartTime(event.target.value)} /><em>北京时间 {formatBeijingTime(startTime)}</em></label>
+        <label className="gift-form-row"><span>过期时间</span><input type="datetime-local" value={endTime} onChange={(event) => setEndTime(event.target.value)} /><em>北京时间 {formatBeijingTime(endTime)}</em></label>
         <div className="gift-form-actions"><button onClick={() => void submit()} type="button">保存</button><button onClick={onBack} type="button">取消</button></div>
       </div>
     </section>
@@ -2104,7 +2107,7 @@ function GiftRecallPage() {
 }
 
 function RewardTemplateList({ onCreate, onDelete, onEdit, templates }: { onCreate: () => void; onDelete: (template: RewardTemplate) => Promise<void>; onEdit: (template: RewardTemplate) => void; templates: RewardTemplate[] }) {
-  return <section className="mail-page"><section className="mail-table-card"><button className="mail-primary-button" onClick={onCreate} type="button">新建</button><MailDataTable columns={["title", "创建时间", "更新时间", "操作"]} rows={templates.map((template) => ({ title: template.title, 创建时间: template.createdAt, 更新时间: template.updatedAt, 操作: <div className="mail-action-buttons"><button onClick={() => onEdit(template)} type="button">编辑</button><button onClick={() => void onDelete(template)} type="button">删除</button></div> }))} /></section></section>;
+  return <section className="mail-page"><section className="mail-table-card"><button className="mail-primary-button" onClick={onCreate} type="button">新建</button><MailDataTable columns={["title", "创建时间", "更新时间", "操作"]} rows={templates.map((template) => ({ title: template.title, 创建时间: formatTimestampValue(template.createdAt), 更新时间: formatTimestampValue(template.updatedAt), 操作: <div className="mail-action-buttons"><button onClick={() => onEdit(template)} type="button">编辑</button><button onClick={() => void onDelete(template)} type="button">删除</button></div> }))} /></section></section>;
 }
 
 function RewardTemplateEditor({ items, onBack, onSaved, onUploadItemTable, template }: { items: ItemOption[]; onBack: () => void; onSaved: () => void; onUploadItemTable: (file: File) => Promise<void>; template?: RewardTemplate }) {
@@ -2155,14 +2158,19 @@ function parseDatetimeLocalSeconds(value: string) {
   return Number.isFinite(seconds) && seconds > 0 ? seconds : 0;
 }
 
-function formatUtc(value: string) {
+function formatBeijingTime(value: string) {
   if (!value) return "";
   const seconds = parseDatetimeLocalSeconds(value);
-  return seconds ? new Date(seconds * 1000).toISOString().slice(0, 16).replace("T", " ") : "";
+  return seconds ? formatTimestamp(seconds) : "";
 }
 
 function formatTimestampValue(value: unknown) {
-  if (typeof value === "string" && /^\d{4}-\d{2}-\d{2}/.test(value)) return value.replace("T", " ").slice(0, 16);
+  if (typeof value === "string" && /^\d{4}-\d{2}-\d{2}/.test(value)) {
+    const normalized = value.includes("T") ? value : value.replace(" ", "T");
+    const parsed = new Date(normalized);
+    if (Number.isFinite(parsed.getTime())) return formatTimestamp(Math.floor(parsed.getTime() / 1000));
+    return value.replace("T", " ").slice(0, 16);
+  }
   return formatTimestamp(value);
 }
 
