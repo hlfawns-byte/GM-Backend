@@ -90,6 +90,8 @@ type GameConfig = {
   serverUrl: string;
   environment: string;
   logo: string;
+  serverAccount?: string;
+  serverPassword?: string;
   iconUrl?: string;
   backgroundUrl?: string;
   id?: number;
@@ -545,6 +547,7 @@ function getApiData(payload: unknown) {
 function humanizeApiError(message: string) {
   if (/Et.*当前时间.*10分钟/.test(message)) return "过期时间至少要比现在晚 10 分钟";
   if (/St.*大于.*0/.test(message)) return "当前接口暂不支持定时生效，请先用立即生效";
+  if (/is not exist this key/i.test(message)) return "正式服没有查到这个 UID 对应的账号，请确认 UID 是否属于当前区服/正式服";
   return message;
 }
 
@@ -560,6 +563,18 @@ function apiBusinessError(result: ApiPostResponse) {
   if (resultCode !== undefined && Number(resultCode) !== 0) {
     return humanizeApiError(String(data?.Desc ?? data?.Msg ?? getObject(result.payload)?.result ?? `Result ${resultCode}`));
   }
+  return "";
+}
+
+function apiPayloadSummary(payload: unknown) {
+  const payloadObject = getObject(payload);
+  const data = getObject(payloadObject?.data) ?? payloadObject;
+  const rawMessage = String(payloadObject?.result ?? data?.Desc ?? data?.Msg ?? "");
+  const code = payloadObject?.code ?? payloadObject?.status;
+  const result = data?.Result;
+  if (rawMessage) return humanizeApiError(rawMessage);
+  if (result !== undefined && Number(result) !== 0) return "接口返回失败，请确认查询条件是否存在于当前区服";
+  if (code && Number(code) >= 400) return `服务端返回 ${String(code)}`;
   return "";
 }
 
@@ -1114,7 +1129,7 @@ function GameSelectScreen({ auth, games, onEnter, onLogout }: { auth: AuthSessio
       const response = await fetch("/local-api/gm-token", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ serverUrl: game.serverUrl }),
+        body: JSON.stringify({ serverUrl: game.serverUrl, serverAccount: game.serverAccount, serverPassword: game.serverPassword }),
       });
       const payload = (await response.json().catch(() => ({}))) as { token?: string; adminAccount?: string; error?: string };
       if (!response.ok || !payload.token) throw new Error(payload.error || "获取 Token 失败");
@@ -2521,6 +2536,7 @@ function ResultFeed({ results }: { results: ApiResult[] }) {
       {results.length === 0 ? <div className="empty-table"><strong>暂无请求记录</strong><span>提交接口后会在这里显示返回数据。</span></div> : results.map((item) => (
         <article className={`result-item ${item.ok ? "" : "fail"}`} key={item.id}>
           <header><strong>{item.label}</strong><span>{item.endpoint} / HTTP {item.status}</span></header>
+          {apiPayloadSummary(item.payload) && <div className="result-summary">{apiPayloadSummary(item.payload)}</div>}
           <pre>{JSON.stringify(item.payload, null, 2)}</pre>
         </article>
       ))}
@@ -2811,7 +2827,7 @@ function UserLogPanel({ onClose }: { onClose: () => void }) {
 }
 
 function GamePanel({ games, onAdd, onDelete, onUpdate, onClose }: { games: GameConfig[]; onAdd: (game: GameConfig) => Promise<void>; onDelete: (gameId: number) => Promise<void>; onUpdate: (game: GameConfig) => Promise<void>; onClose: () => void }) {
-  const emptyForm = { name: "包包4", serverName: "", serverUrl: "", environment: portal === "prod" ? "Prod" : "Test", logo: "包", iconUrl: "", backgroundUrl: "" };
+  const emptyForm = { name: "包包4", serverName: "", serverUrl: "", environment: portal === "prod" ? "Prod" : "Test", logo: "包", serverAccount: "", serverPassword: "", iconUrl: "", backgroundUrl: "" };
   const [form, setForm] = React.useState<GameConfig>(emptyForm);
   const [editingId, setEditingId] = React.useState<number | null>(null);
   const [formError, setFormError] = React.useState("");
@@ -2845,12 +2861,16 @@ function GamePanel({ games, onAdd, onDelete, onUpdate, onClose }: { games: GameC
             event.preventDefault();
             try {
               setFormError("");
+              if (!form.serverAccount?.trim() || !form.serverPassword?.trim()) {
+                setFormError("请填写该区服的服务端账号和密码");
+                return;
+              }
               if (editingId) {
                 await onUpdate({ ...form, id: editingId });
                 resetForm();
               } else {
                 await onAdd(form);
-                setForm((current) => ({ ...emptyForm, name: current.name, environment: current.environment, logo: current.logo }));
+                setForm((current) => ({ ...emptyForm, name: current.name }));
               }
             } catch (error) {
               setFormError(error instanceof Error ? error.message : editingId ? "保存区服失败" : "新增区服失败");
@@ -2859,8 +2879,8 @@ function GamePanel({ games, onAdd, onDelete, onUpdate, onClose }: { games: GameC
             <label>游戏名<input value={form.name} onChange={(event) => setForm({ ...form, name: event.target.value })} placeholder="例如：包包4" /></label>
             <label>区服<input value={form.serverName} onChange={(event) => setForm({ ...form, serverName: event.target.value })} placeholder="例如：测试服、开发服、正式服" /></label>
             <label>服务端地址<input value={form.serverUrl} onChange={(event) => setForm({ ...form, serverUrl: event.target.value })} placeholder="http://52.77.195.98:9089" /></label>
-            <label>环境<select value={form.environment} onChange={(event) => setForm({ ...form, environment: event.target.value })}><option>Test</option><option>Dev</option><option>Prod</option></select></label>
-            <label>Logo文字<input value={form.logo} maxLength={2} onChange={(event) => setForm({ ...form, logo: event.target.value })} placeholder="包" /></label>
+            <label>服务端账号<input autoComplete="off" value={form.serverAccount ?? ""} onChange={(event) => setForm({ ...form, serverAccount: event.target.value })} placeholder="请输入该区服服务端账号" /></label>
+            <label>服务端密码<input autoComplete="new-password" type="password" value={form.serverPassword ?? ""} onChange={(event) => setForm({ ...form, serverPassword: event.target.value })} placeholder="请输入该区服服务端密码" /></label>
             <label>游戏Icon图片<input accept="image/*" type="file" onChange={(event) => loadImage(event.target.files?.[0], "iconUrl")} /></label>
             <label>游戏背景图片<input accept="image/*" type="file" onChange={(event) => loadImage(event.target.files?.[0], "backgroundUrl")} /></label>
             {(form.iconUrl || form.backgroundUrl) && (
@@ -2877,8 +2897,8 @@ function GamePanel({ games, onAdd, onDelete, onUpdate, onClose }: { games: GameC
           </form>
           <div className="managed-list">{games.length === 0 ? <div className="empty-table"><strong>暂无游戏区服</strong><span>请在左侧新增。</span></div> : games.map((game) => (
             <article className="managed-account" key={game.id ?? `${game.name}/${game.serverName}`}>
-              <div><strong>{game.name} / {game.serverName}</strong><span>{game.environment}</span></div>
-              <div className="tag-row"><small>{game.serverUrl}</small><small>{game.iconUrl ? "已上传Icon" : `Logo：${game.logo}`}</small>{game.backgroundUrl && <small>已上传背景</small>}</div>
+              <div><strong>{game.name} / {game.serverName}</strong><span>{game.serverAccount ? "已配置服务端账号" : "使用默认服务端账号"}</span></div>
+              <div className="tag-row"><small>{game.serverUrl}</small><small>{game.iconUrl ? "已上传Icon" : "未上传Icon"}</small>{game.backgroundUrl && <small>已上传背景</small>}</div>
               <div className="managed-actions"><button onClick={() => beginEdit(game)} type="button"><UserCog size={14} />编辑</button><button onClick={() => game.id && void onDelete(game.id)} type="button"><Trash2 size={14} />删除</button></div>
             </article>
           ))}</div>

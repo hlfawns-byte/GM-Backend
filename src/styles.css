@@ -3026,6 +3026,15 @@ tbody tr:hover,
   font-size: 12px;
 }
 
+.result-summary {
+  border: 1px solid #ffd7d1;
+  border-radius: 4px;
+  padding: 9px 11px;
+  color: #b51f17;
+  background: #fff7f5;
+  font-size: 13px;
+}
+
 .result-item pre {
   max-height: 220px;
   overflow: auto;

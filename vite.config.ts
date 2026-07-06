@@ -29,6 +29,8 @@ type GameConfigRecord = {
   serverUrl: string;
   environment: string;
   logo: string;
+  serverAccount?: string;
+  serverPassword?: string;
   iconUrl?: string;
   backgroundUrl?: string;
 };
@@ -559,6 +561,8 @@ function localAccountPlugin() {
             serverUrl,
             environment: String(body.environment ?? "Test").trim() || "Test",
             logo: String(body.logo ?? name.slice(0, 1)).trim() || "G",
+            serverAccount: String(body.serverAccount ?? "").trim() || undefined,
+            serverPassword: String(body.serverPassword ?? "").trim() || undefined,
             iconUrl: String(body.iconUrl ?? "").trim() || undefined,
             backgroundUrl: String(body.backgroundUrl ?? "").trim() || undefined,
           };
@@ -598,6 +602,8 @@ function localAccountPlugin() {
             serverUrl,
             environment: String(body.environment ?? existing.environment).trim() || "Test",
             logo: String(body.logo ?? existing.logo ?? name.slice(0, 1)).trim() || "G",
+            serverAccount: String(body.serverAccount ?? existing.serverAccount ?? "").trim() || undefined,
+            serverPassword: String(body.serverPassword ?? existing.serverPassword ?? "").trim() || undefined,
             iconUrl: String(body.iconUrl ?? existing.iconUrl ?? "").trim() || undefined,
             backgroundUrl: String(body.backgroundUrl ?? existing.backgroundUrl ?? "").trim() || undefined,
           };
@@ -703,7 +709,9 @@ function localAccountPlugin() {
 
         if (url === "/local-api/gm-token" && req.method === "POST") {
           const body = await readJsonBody(req);
-          const credentials = readAdminCredentials();
+          const serverAccount = String(body.serverAccount ?? "").trim();
+          const serverPassword = String(body.serverPassword ?? "").trim();
+          const credentials = serverAccount && serverPassword ? { account: serverAccount, password: serverPassword } : readAdminCredentials();
           if (!credentials) {
             sendJson(res, 428, { error: "请先使用游戏服务端管理员账号登录一次" });
             return;
