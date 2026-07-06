@@ -16,6 +16,7 @@ const dataDir = path.resolve(__dirname, "data", portal);
 const files = {
   accounts: path.join(dataDir, "accounts.json"),
   adminCredentials: path.join(dataDir, "admin-credentials.json"),
+  adminProfile: path.join(dataDir, "admin-profile.json"),
   games: path.join(dataDir, "games.json"),
   items: path.join(dataDir, "items.json"),
   itemUpload: path.join(dataDir, "uploads", "Item.xlsx"),
@@ -138,6 +139,19 @@ function writeAdminCredentials(credentials) {
   writeJson(files.adminCredentials, credentials);
 }
 
+function readAdminProfile(account) {
+  const profile = readJson(files.adminProfile, {});
+  return {
+    account,
+    displayName: String(profile.displayName ?? account ?? "admin"),
+    avatarUrl: String(profile.avatarUrl ?? ""),
+  };
+}
+
+function writeAdminProfile(profile) {
+  writeJson(files.adminProfile, profile);
+}
+
 function gmApiBase(serverUrl) {
   const raw = String(serverUrl ?? "").trim();
   if (!raw || raw.startsWith("/gm-api")) return gmServerTarget;
@@ -226,6 +240,56 @@ async function handleLocalApi(req, res, pathname) {
     return true;
   }
 
+  if (pathname === "/local-api/profile" && req.method === "GET") {
+    const requestUrl = new URL(req.url || "/", "http://localhost");
+    const account = String(requestUrl.searchParams.get("account") ?? "").trim();
+    const found = readAccounts().find((item) => item.account === account);
+    if (found) {
+      const { password: _password, ...safeAccount } = found;
+      sendJson(res, 200, { profile: safeAccount });
+      return true;
+    }
+    sendJson(res, 200, { profile: readAdminProfile(account || readAdminCredentials()?.account || "admin") });
+    return true;
+  }
+
+  if (pathname === "/local-api/profile" && req.method === "POST") {
+    const body = await readJsonBody(req);
+    const account = String(body.account ?? "").trim();
+    const displayName = String(body.displayName ?? account).trim();
+    const avatarUrl = String(body.avatarUrl ?? "");
+    const oldPassword = String(body.oldPassword ?? "");
+    const newPassword = String(body.newPassword ?? "");
+    if (!account || !displayName) {
+      sendJson(res, 400, { error: "账号和显示名称不能为空" });
+      return true;
+    }
+    const accounts = readAccounts();
+    const index = accounts.findIndex((item) => item.account === account);
+    if (index >= 0) {
+      if (newPassword) {
+        if (accounts[index].password !== oldPassword) {
+          sendJson(res, 403, { error: "原密码不正确" });
+          return true;
+        }
+        accounts[index].password = newPassword;
+      }
+      accounts[index] = { ...accounts[index], displayName, avatarUrl };
+      writeAccounts(accounts);
+      const { password: _password, ...safeAccount } = accounts[index];
+      sendJson(res, 200, { profile: safeAccount });
+      return true;
+    }
+    if (newPassword) {
+      sendJson(res, 400, { error: "admin 游戏服务端密码不能在后台修改" });
+      return true;
+    }
+    const profile = { account, displayName, avatarUrl };
+    writeAdminProfile(profile);
+    sendJson(res, 200, { profile });
+    return true;
+  }
+
   if (pathname === "/local-api/user-logs" && req.method === "GET") {
     sendJson(res, 200, { logs: readJson(files.userLogs, []) });
     return true;
@@ -254,6 +318,12 @@ async function handleLocalApi(req, res, pathname) {
 
   if (pathname === "/local-api/items" && req.method === "GET") {
     sendJson(res, 200, { items: readJson(files.items, []) });
+    return true;
+  }
+
+  if (pathname === "/local-api/game-servers" && req.method === "GET") {
+    const servers = Array.from({ length: 200 }, (_, index) => ({ id: index + 1, name: `游戏内区服 ${index + 1}` }));
+    sendJson(res, 200, { servers });
     return true;
   }
 
@@ -306,10 +376,10 @@ async function handleLocalApi(req, res, pathname) {
   if (pathname === "/local-api/mail-templates" && req.method === "POST") {
     const body = await readJsonBody(req);
     const templates = readJson(files.mailTemplates, []);
-    const now = new Date().toISOString().slice(0, 19).replace("T", " ");
+    const now = Math.floor(Date.now() / 1000);
     const id = String(body.id ?? `t-${Date.now()}`);
     const existing = Array.isArray(templates) ? templates.find((template) => template.id === id) : null;
-    const next = { id, name: String(body.name ?? "未命名模板"), title: String(body.title ?? ""), body: String(body.body ?? ""), contents: body.contents && typeof body.contents === "object" ? body.contents : undefined, createdAt: String(existing?.createdAt ?? now), updatedAt: now };
+    const next = { id, name: String(body.name ?? "未命名模板").slice(0, 30), title: String(body.title ?? ""), body: String(body.body ?? ""), contents: body.contents && typeof body.contents === "object" ? body.contents : undefined, createdAt: existing?.createdAt ?? now, updatedAt: now };
     writeJson(files.mailTemplates, [next, ...(Array.isArray(templates) ? templates : []).filter((template) => template.id !== id)]);
     sendJson(res, 200, { template: next });
     return true;
@@ -332,10 +402,10 @@ async function handleLocalApi(req, res, pathname) {
   if (pathname === "/local-api/reward-templates" && req.method === "POST") {
     const body = await readJsonBody(req);
     const templates = readJson(files.rewardTemplates, []);
-    const now = new Date().toISOString().slice(0, 19).replace("T", " ");
+    const now = Math.floor(Date.now() / 1000);
     const id = String(body.id ?? `r-${Date.now()}`);
     const existing = Array.isArray(templates) ? templates.find((template) => template.id === id) : null;
-    const next = { id, title: String(body.title ?? "未命名奖励模板"), items: Array.isArray(body.items) ? body.items : [], createdAt: String(existing?.createdAt ?? now), updatedAt: now };
+    const next = { id, title: String(body.title ?? "未命名奖励模板"), items: Array.isArray(body.items) ? body.items : [], createdAt: existing?.createdAt ?? now, updatedAt: now };
     writeJson(files.rewardTemplates, [next, ...(Array.isArray(templates) ? templates : []).filter((template) => template.id !== id)]);
     sendJson(res, 200, { template: next });
     return true;

@@ -1,4 +1,4 @@
-import { defineConfig } from "vite";
+﻿import { defineConfig } from "vite";
 import react from "@vitejs/plugin-react";
 import { spawnSync } from "node:child_process";
 import fs from "node:fs";
@@ -9,11 +9,12 @@ type ManagedAccountRecord = {
   account: string;
   password?: string;
   displayName: string;
+  avatarUrl?: string;
   role: string;
   games: string[];
   permissions: string[];
   isManager?: boolean;
-  status: "启用" | "停用" | "鍚敤" | "鍋滅敤";
+  status: string;
 };
 
 type AdminCredentials = {
@@ -48,12 +49,13 @@ type UserLogRecord = {
   game?: string;
   serverName?: string;
   detail?: string;
-  result: "成功" | "失败";
+  result: string;
 };
 
 const portal = process.env.GM_PORTAL === "prod" ? "prod" : "test";
 const accountsFile = path.resolve(`data/${portal}/accounts.json`);
 const adminCredentialFile = path.resolve(`data/${portal}/admin-credentials.json`);
+const adminProfileFile = path.resolve(`data/${portal}/admin-profile.json`);
 const gamesFile = path.resolve(`data/${portal}/games.json`);
 const itemsFile = path.resolve(`data/${portal}/items.json`);
 const itemUploadFile = path.resolve(`data/${portal}/uploads/Item.xlsx`);
@@ -254,6 +256,19 @@ function writeAdminCredentials(credentials: AdminCredentials) {
   fs.writeFileSync(adminCredentialFile, JSON.stringify(credentials, null, 2), "utf8");
 }
 
+function readAdminProfile(account: string) {
+  const profile = readJsonFile<Record<string, unknown>>(adminProfileFile, {});
+  return {
+    account,
+    displayName: String(profile.displayName ?? account ?? "admin"),
+    avatarUrl: String(profile.avatarUrl ?? ""),
+  };
+}
+
+function writeAdminProfile(profile: Record<string, unknown>) {
+  writeJsonFile(adminProfileFile, profile);
+}
+
 function sendJson(res: import("node:http").ServerResponse, status: number, data: unknown) {
   res.statusCode = status;
   res.setHeader("Content-Type", "application/json; charset=utf-8");
@@ -342,6 +357,56 @@ function localAccountPlugin() {
           return;
         }
 
+        if (pathname === "/local-api/profile" && req.method === "GET") {
+          const requestUrl = new URL(req.url ?? "/", "http://localhost");
+          const account = String(requestUrl.searchParams.get("account") ?? "").trim();
+          const found = readAccounts().find((item) => item.account === account);
+          if (found) {
+            const { password: _password, ...safeAccount } = found;
+            sendJson(res, 200, { profile: safeAccount });
+            return;
+          }
+          sendJson(res, 200, { profile: readAdminProfile(account || readAdminCredentials()?.account || "admin") });
+          return;
+        }
+
+        if (pathname === "/local-api/profile" && req.method === "POST") {
+          const body = await readJsonBody(req);
+          const account = String(body.account ?? "").trim();
+          const displayName = String(body.displayName ?? account).trim();
+          const avatarUrl = String(body.avatarUrl ?? "");
+          const oldPassword = String(body.oldPassword ?? "");
+          const newPassword = String(body.newPassword ?? "");
+          if (!account || !displayName) {
+            sendJson(res, 400, { error: "账号和显示名称不能为空" });
+            return;
+          }
+          const accounts = readAccounts();
+          const index = accounts.findIndex((item) => item.account === account);
+          if (index >= 0) {
+            if (newPassword) {
+              if (accounts[index].password !== oldPassword) {
+                sendJson(res, 403, { error: "原密码不正确" });
+                return;
+              }
+              accounts[index].password = newPassword;
+            }
+            accounts[index] = { ...accounts[index], displayName, avatarUrl };
+            writeAccounts(accounts);
+            const { password: _password, ...safeAccount } = accounts[index];
+            sendJson(res, 200, { profile: safeAccount });
+            return;
+          }
+          if (newPassword) {
+            sendJson(res, 400, { error: "admin 游戏服务端密码不能在后台修改" });
+            return;
+          }
+          const profile = { account, displayName, avatarUrl };
+          writeAdminProfile(profile);
+          sendJson(res, 200, { profile });
+          return;
+        }
+
         if (url === "/local-api/user-logs" && req.method === "GET") {
           sendJson(res, 200, { logs: readJsonFile<UserLogRecord[]>(userLogsFile, []) });
           return;
@@ -370,6 +435,12 @@ function localAccountPlugin() {
 
         if (url === "/local-api/items" && req.method === "GET") {
           sendJson(res, 200, { items: readItems() });
+          return;
+        }
+
+        if (url === "/local-api/game-servers" && req.method === "GET") {
+          const servers = Array.from({ length: 200 }, (_, index) => ({ id: index + 1, name: `游戏内区服 ${index + 1}` }));
+          sendJson(res, 200, { servers });
           return;
         }
 
@@ -423,10 +494,10 @@ function localAccountPlugin() {
         if (url === "/local-api/mail-templates" && req.method === "POST") {
           const body = await readJsonBody(req);
           const templates = readJsonFile<Record<string, unknown>[]>(mailTemplatesFile, []);
-          const now = new Date().toISOString().slice(0, 19).replace("T", " ");
+          const now = Math.floor(Date.now() / 1000);
           const id = String(body.id ?? `t-${Date.now()}`);
           const existing = templates.find((template) => template.id === id);
-          const next = { id, name: String(body.name ?? "未命名模板"), title: String(body.title ?? ""), body: String(body.body ?? ""), contents: body.contents && typeof body.contents === "object" ? body.contents : undefined, createdAt: String(existing?.createdAt ?? now), updatedAt: now };
+          const next = { id, name: String(body.name ?? "未命名模板").slice(0, 30), title: String(body.title ?? ""), body: String(body.body ?? ""), contents: body.contents && typeof body.contents === "object" ? body.contents : undefined, createdAt: existing?.createdAt ?? now, updatedAt: now };
           writeJsonFile(mailTemplatesFile, [next, ...templates.filter((template) => template.id !== id)]);
           sendJson(res, 200, { template: next });
           return;
@@ -449,9 +520,10 @@ function localAccountPlugin() {
         if (url === "/local-api/reward-templates" && req.method === "POST") {
           const body = await readJsonBody(req);
           const templates = readJsonFile<Record<string, unknown>[]>(rewardTemplatesFile, []);
-          const now = new Date().toISOString().slice(0, 19).replace("T", " ");
+          const now = Math.floor(Date.now() / 1000);
           const id = String(body.id ?? `r-${Date.now()}`);
-          const next = { id, title: String(body.title ?? "未命名奖励模板"), items: Array.isArray(body.items) ? body.items : [], createdAt: now, updatedAt: now };
+          const existing = templates.find((template) => template.id === id);
+          const next = { id, title: String(body.title ?? "未命名奖励模板"), items: Array.isArray(body.items) ? body.items : [], createdAt: existing?.createdAt ?? now, updatedAt: now };
           writeJsonFile(rewardTemplatesFile, [next, ...templates.filter((template) => template.id !== id)]);
           sendJson(res, 200, { template: next });
           return;
@@ -596,7 +668,7 @@ function localAccountPlugin() {
           const body = await readJsonBody(req);
           const account = String(body.account ?? "").trim();
           const password = String(body.password ?? "").trim();
-          const found = readAccounts().find((item) => item.account === account && item.password === password && (item.status === "启用" || item.status === "鍚敤"));
+          const found = readAccounts().find((item) => item.account === account && item.password === password && (item.status === "启用" || item.status === "鍚敤" || item.status === "閸氼垳鏁?"));
           if (!found) {
             sendJson(res, 401, { error: "账号或密码错误" });
             return;
@@ -692,3 +764,4 @@ export default defineConfig({
     },
   },
 });
+

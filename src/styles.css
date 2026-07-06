@@ -198,6 +198,53 @@ button {
   font-size: 11px;
 }
 
+.profile-button {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  max-width: 180px;
+  height: 38px;
+  border: 1px solid #dbe4ef;
+  border-radius: 6px;
+  padding: 0 10px 0 6px;
+  color: #344257;
+  background: #fff;
+  font-size: 13px;
+  font-weight: 750;
+}
+
+.profile-button:hover {
+  background: #f7fbff;
+}
+
+.profile-button > span:last-child {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.avatar-image,
+.avatar-fallback {
+  flex: 0 0 auto;
+  width: 30px;
+  height: 30px;
+  border-radius: 50%;
+}
+
+.avatar-image {
+  object-fit: cover;
+  background: #eef3f8;
+}
+
+.avatar-fallback {
+  display: grid;
+  place-items: center;
+  color: #fff;
+  background: #2f8fea;
+  font-size: 13px;
+  font-weight: 800;
+}
+
 .icon-button {
   display: grid;
   place-items: center;
@@ -1747,6 +1794,7 @@ tbody tr:hover,
   font-size: 13px;
   line-height: 1.35;
   word-break: break-word;
+  overflow-wrap: anywhere;
 }
 
 .mail-data-table th {
@@ -1763,8 +1811,18 @@ tbody tr:hover,
   background: #f7fbff;
 }
 
+.mail-ellipsis-cell {
+  display: block;
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .mail-action-buttons {
   display: inline-flex;
+  flex-wrap: wrap;
+  justify-content: center;
   gap: 9px;
 }
 
@@ -1810,7 +1868,7 @@ tbody tr:hover,
 }
 
 .mail-time-cell span {
-  white-space: nowrap;
+  white-space: normal;
 }
 
 .mail-status,
@@ -2140,6 +2198,8 @@ tbody tr:hover,
 }
 
 .mail-template-name {
+  display: grid;
+  gap: 8px;
   padding: 24px 132px 36px;
   border-bottom: 1px solid #edf1f5;
 }
@@ -2149,6 +2209,12 @@ tbody tr:hover,
   grid-template-columns: 92px minmax(0, 1fr);
   align-items: center;
   color: #566579;
+}
+
+.mail-template-name small {
+  justify-self: end;
+  color: #7a8798;
+  font-size: 12px;
 }
 
 .mail-language-tabs {
@@ -2181,6 +2247,21 @@ tbody tr:hover,
 .mail-template-form {
   max-width: 1420px;
   padding-top: 18px;
+}
+
+.mail-template-file-actions {
+  display: inline-flex;
+  align-items: center;
+  gap: 18px;
+}
+
+.mail-template-file-actions button {
+  height: 32px;
+  border: 1px solid #d9e0e9;
+  border-radius: 4px;
+  padding: 0 12px;
+  color: #526074;
+  background: #fff;
 }
 
 .mail-template-body textarea {
@@ -2250,6 +2331,150 @@ tbody tr:hover,
   grid-column: 1 / -1;
   justify-self: end;
   min-width: 118px;
+}
+
+.profile-panel {
+  width: min(520px, calc(100vw - 48px));
+  max-height: calc(100vh - 64px);
+  overflow: hidden;
+  border-radius: 7px;
+  background: #fff;
+  box-shadow: 0 24px 80px rgb(12 20 34 / 28%);
+}
+
+.profile-panel header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  height: 62px;
+  padding: 0 20px;
+  border-bottom: 1px solid #e6ebf2;
+}
+
+.profile-panel header div {
+  display: grid;
+  gap: 3px;
+}
+
+.profile-panel header strong {
+  color: #263548;
+}
+
+.profile-panel header span {
+  color: #7a8798;
+  font-size: 12px;
+}
+
+.profile-panel header button {
+  width: 30px;
+  height: 30px;
+  border: 0;
+  border-radius: 4px;
+  color: #6c7788;
+  background: #f2f5f8;
+}
+
+.profile-form {
+  display: grid;
+  gap: 16px;
+  padding: 22px 24px 24px;
+}
+
+.profile-form label {
+  display: grid;
+  gap: 7px;
+  color: #566579;
+  font-size: 13px;
+  font-weight: 700;
+}
+
+.profile-form input {
+  height: 38px;
+}
+
+.profile-avatar-upload {
+  justify-items: center;
+  position: relative;
+  width: 128px;
+  margin: 0 auto 4px;
+  cursor: pointer;
+}
+
+.profile-avatar-upload .avatar-image,
+.profile-avatar-upload .avatar-fallback {
+  width: 76px;
+  height: 76px;
+  font-size: 24px;
+}
+
+.profile-avatar-upload span {
+  color: #2f8fea;
+  font-size: 12px;
+}
+
+.profile-avatar-upload input {
+  position: absolute;
+  inset: 0;
+  opacity: 0;
+  cursor: pointer;
+}
+
+.profile-password-block {
+  display: grid;
+  gap: 12px;
+  border-top: 1px solid #edf1f5;
+  padding-top: 16px;
+}
+
+.profile-password-block strong {
+  color: #263548;
+  font-size: 14px;
+}
+
+.profile-password-block p {
+  margin: 0;
+  color: #7a8798;
+  font-size: 13px;
+  line-height: 1.6;
+}
+
+.profile-status {
+  min-height: 32px;
+  display: flex;
+  align-items: center;
+  border: 1px solid #ffd7d1;
+  border-radius: 4px;
+  padding: 7px 10px;
+  color: #b51f17;
+  background: #fff7f5;
+  font-size: 13px;
+}
+
+.profile-status.success {
+  border-color: #d1e8d8;
+  color: #277244;
+  background: #f4fbf6;
+}
+
+.profile-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 10px;
+}
+
+.profile-actions button {
+  height: 34px;
+  border: 1px solid #d9e0e9;
+  border-radius: 4px;
+  padding: 0 16px;
+  color: #667388;
+  background: #fff;
+}
+
+.profile-actions button:first-child {
+  border-color: #2f8fea;
+  color: #fff;
+  background: #2f8fea;
 }
 
 .login-page {

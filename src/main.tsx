@@ -1,5 +1,6 @@
 ﻿import React from "react";
 import ReactDOM from "react-dom/client";
+import * as XLSX from "xlsx";
 import {
   Bell,
   ChevronDown,
@@ -65,6 +66,7 @@ type ManagedAccount = {
   account: string;
   password?: string;
   displayName: string;
+  avatarUrl?: string;
   role: string;
   games: string[];
   permissions: string[];
@@ -75,6 +77,8 @@ type ManagedAccount = {
 type AuthSession = {
   adminAccount: string;
   operatorAccount: string;
+  displayName?: string;
+  avatarUrl?: string;
   isAdmin: boolean;
   isRootAdmin: boolean;
   games: string[];
@@ -140,6 +144,11 @@ type ItemOption = {
   icon?: string;
 };
 
+type ServerOption = {
+  id: number;
+  name: string;
+};
+
 type MailTemplateContent = {
   title: string;
   body: string;
@@ -194,16 +203,25 @@ type MailRewardItem = {
 };
 
 const MAX_REWARD_COUNT = 2_000_000_000;
+const MAX_REWARD_GROUPS = 100;
+const MAX_TEMPLATE_NAME_LENGTH = 30;
 
 function validateRewardRows(rewards: MailRewardItem[], items: ItemOption[]) {
-  const filled = rewards.filter((reward) => reward.itemId.trim() || (reward.count.trim() && reward.count.trim() !== "0"));
-  if (!filled.length) return { ok: true, itemList: [] as number[] };
+  const normalized = rewards.map((reward) => ({ itemId: reward.itemId.trim(), count: reward.count.trim() }));
+  const filled = normalized.filter((reward) => reward.itemId || reward.count);
+  if (!filled.length) return rewards.length > 1 ? { ok: false, message: "ItemID不能为空", itemList: [] as number[] } : { ok: true, itemList: [] as number[] };
   const itemList: number[] = [];
   for (const reward of filled) {
+    if (!reward.itemId) {
+      return { ok: false, message: "ItemID不能为空", itemList: [] as number[] };
+    }
+    if (!reward.count || reward.count === "0") {
+      return { ok: false, message: "ItemID数量应该>=1", itemList: [] as number[] };
+    }
     const itemId = Number(reward.itemId);
     const count = Number(reward.count);
     if (!Number.isInteger(itemId) || itemId <= 0 || !Number.isInteger(count) || count <= 0) {
-      return { ok: false, message: "奖励道具ID和数量必须为正整数", itemList: [] as number[] };
+      return { ok: false, message: itemId > 0 ? "ItemID数量应该>=1" : "ItemID不能为空", itemList: [] as number[] };
     }
     if (count > MAX_REWARD_COUNT) {
       return { ok: false, message: `奖励数量不能超过 ${MAX_REWARD_COUNT}`, itemList: [] as number[] };
@@ -213,8 +231,8 @@ function validateRewardRows(rewards: MailRewardItem[], items: ItemOption[]) {
     }
     itemList.push(itemId, count);
   }
-  if (itemList.length > 200) {
-    return { ok: false, message: "奖励道具过多，请控制在100组以内后再保存", itemList: [] as number[] };
+  if (itemList.length > MAX_REWARD_GROUPS * 2) {
+    return { ok: false, message: `奖励道具过多，请控制在${MAX_REWARD_GROUPS}组以内后再保存`, itemList: [] as number[] };
   }
   return { ok: true, itemList };
 }
@@ -421,6 +439,79 @@ function toFlexibleNumberArray(value?: string) {
     .filter((item) => Number.isFinite(item));
 }
 
+function toVersionNumberArray(value?: string) {
+  return String(value ?? "")
+    .split(/[\s,，;；]+/)
+    .map((item) => item.trim())
+    .filter((item) => item.includes("."))
+    .map(parseFlexibleNumber)
+    .filter((item) => Number.isFinite(item));
+}
+
+function dateToDatetimeLocal(value: string, endOfDay = false) {
+  if (!value) return "";
+  if (value.includes("T")) return value;
+  return `${value}T${endOfDay ? "23:59" : "00:00"}`;
+}
+
+function templatePrimaryContent(template: MailTemplate) {
+  const contents = template.contents ?? {};
+  return contents[defaultMailLanguage] ?? Object.values(contents).find((content) => content.title?.trim() || content.body?.trim()) ?? { title: template.title, body: template.body };
+}
+
+function stringFromCell(value: unknown) {
+  return String(value ?? "").trim();
+}
+
+async function parseMailTemplateFile(file: File) {
+  const workbook = XLSX.read(await file.arrayBuffer(), { type: "array", cellDates: false });
+  const sheet = workbook.Sheets[workbook.SheetNames[0]];
+  if (!sheet) throw new Error("模板文件中没有可读取的工作表");
+  const rows = XLSX.utils.sheet_to_json<unknown[]>(sheet, { header: 1, defval: "" });
+  const usefulRows = rows.filter((row) => row.some((cell) => stringFromCell(cell)));
+  if (!usefulRows.length) throw new Error("模板文件没有内容");
+  const headerIndex = usefulRows.findIndex((row) => row.some((cell) => /标题|title/i.test(stringFromCell(cell))) && row.some((cell) => /内容|body|content/i.test(stringFromCell(cell))));
+  const headers = headerIndex >= 0 ? usefulRows[headerIndex].map(stringFromCell) : [];
+  const dataRows = usefulRows.slice(headerIndex >= 0 ? headerIndex + 1 : 0);
+  const findColumn = (patterns: RegExp[], fallback: number) => {
+    const index = headers.findIndex((header) => patterns.some((pattern) => pattern.test(header)));
+    return index >= 0 ? index : fallback;
+  };
+  const languageColumn = findColumn([/语言/, /^lang(?:uage)?$/i], -1);
+  const titleColumn = findColumn([/标题/, /^title$/i], 0);
+  const bodyColumn = findColumn([/内容/, /^body$/i, /^content$/i], titleColumn === 0 ? 1 : 0);
+  const nameColumn = findColumn([/模板/, /^name$/i], -1);
+  const contents = Object.fromEntries(mailLanguages.map((language) => [language, { title: "", body: "" }])) as Record<string, MailTemplateContent>;
+  if (languageColumn >= 0) {
+    for (const item of dataRows) {
+      const language = mailLanguages.find((candidate) => candidate === stringFromCell(item[languageColumn]));
+      if (!language) continue;
+      contents[language] = { title: stringFromCell(item[titleColumn]), body: stringFromCell(item[bodyColumn]) };
+    }
+  } else {
+    for (const language of mailLanguages) {
+      const titleIndex = headers.findIndex((header) => header.includes(language) && /标题|title/i.test(header));
+      const bodyIndex = headers.findIndex((header) => header.includes(language) && /内容|body|content/i.test(header));
+      if (titleIndex >= 0 || bodyIndex >= 0) {
+        const first = dataRows[0] ?? [];
+        contents[language] = { title: titleIndex >= 0 ? stringFromCell(first[titleIndex]) : "", body: bodyIndex >= 0 ? stringFromCell(first[bodyIndex]) : "" };
+      }
+    }
+  }
+  const row = dataRows.find((item) => stringFromCell(item[titleColumn]) || stringFromCell(item[bodyColumn]));
+  if (row) {
+    contents[defaultMailLanguage] = { title: stringFromCell(row[titleColumn]), body: stringFromCell(row[bodyColumn]) };
+  }
+  if (!Object.values(contents).some((content) => content.title || content.body)) throw new Error("模板文件没有邮件标题或邮件内容");
+  const primary = contents[defaultMailLanguage].title || contents[defaultMailLanguage].body ? contents[defaultMailLanguage] : Object.values(contents).find((content) => content.title || content.body) ?? { title: "", body: "" };
+  return {
+    name: nameColumn >= 0 && row ? stringFromCell(row[nameColumn]) : "",
+    title: primary.title,
+    body: primary.body,
+    contents,
+  };
+}
+
 function parseFlexibleNumber(value: string) {
   if (/^\d+(?:\.\d+){2,3}$/.test(value)) {
     const parts = value.split(".").map((part) => Number(part));
@@ -451,17 +542,23 @@ function getApiData(payload: unknown) {
   return getObject(getObject(payload)?.data) ?? getObject(payload);
 }
 
+function humanizeApiError(message: string) {
+  if (/Et.*当前时间.*10分钟/.test(message)) return "过期时间至少要比现在晚 10 分钟";
+  if (/St.*大于.*0/.test(message)) return "当前接口暂不支持定时生效，请先用立即生效";
+  return message;
+}
+
 function apiBusinessError(result: ApiPostResponse) {
   if (!result.ok) {
     const payloadError = String(getObject(result.payload)?.error ?? getObject(result.payload)?.result ?? getObject(result.payload)?.message ?? "");
-    if (payloadError) return payloadError;
+    if (payloadError) return humanizeApiError(payloadError);
     if (result.status === 405) return "服务器拒绝了请求，请检查奖励数量、道具ID或接口是否支持当前参数";
     return `HTTP ${result.status}`;
   }
   const data = getApiData(result.payload);
   const resultCode = data?.Result ?? getObject(result.payload)?.Result;
   if (resultCode !== undefined && Number(resultCode) !== 0) {
-    return String(data?.Desc ?? data?.Msg ?? getObject(result.payload)?.result ?? `Result ${resultCode}`);
+    return humanizeApiError(String(data?.Desc ?? data?.Msg ?? getObject(result.payload)?.result ?? `Result ${resultCode}`));
   }
   return "";
 }
@@ -519,6 +616,7 @@ function App() {
   const [accountPanelOpen, setAccountPanelOpen] = React.useState(false);
   const [gamePanelOpen, setGamePanelOpen] = React.useState(false);
   const [logPanelOpen, setLogPanelOpen] = React.useState(false);
+  const [profilePanelOpen, setProfilePanelOpen] = React.useState(false);
   const [appBuild, setAppBuild] = React.useState("");
   const [versionNoticeOpen, setVersionNoticeOpen] = React.useState(false);
   const [openNavGroups, setOpenNavGroups] = React.useState<Record<string, boolean>>(() => Object.fromEntries(navGroups.map((group) => [group.label, true])));
@@ -704,6 +802,21 @@ function App() {
     void writeUserLog({ action: "删除游戏区服", target: String(gameId) });
   };
 
+  const updateProfile = async (profile: { displayName: string; avatarUrl: string; oldPassword?: string; newPassword?: string }) => {
+    if (!auth) return;
+    const response = await fetch("/local-api/profile", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ account: auth.operatorAccount, isRootAdmin: auth.isRootAdmin, ...profile }),
+    });
+    const payload = (await response.json().catch(() => ({}))) as { profile?: Partial<AuthSession>; error?: string };
+    if (!response.ok) throw new Error(payload.error || "保存个人信息失败");
+    const nextAuth = { ...auth, displayName: payload.profile?.displayName ?? profile.displayName, avatarUrl: payload.profile?.avatarUrl ?? profile.avatarUrl };
+    setAuth(nextAuth);
+    await refreshAccounts();
+    void writeUserLog({ action: "修改个人信息", target: auth.operatorAccount });
+  };
+
   return (
     <>
     <main className="app-shell">
@@ -746,7 +859,10 @@ function App() {
                 <button className="account-button" onClick={() => setLogPanelOpen(true)} type="button"><Database size={15} />用户日志</button>
               </>
             )}
-            <div className="identity-stack"><span>{session.operatorAccount}</span></div>
+            <button className="profile-button" onClick={() => setProfilePanelOpen(true)} type="button" title="个人信息设置">
+              <AvatarImage account={session.operatorAccount} avatarUrl={auth.avatarUrl} displayName={auth.displayName || session.operatorAccount} />
+              <span>{auth.displayName || session.operatorAccount}</span>
+            </button>
             <button className="icon-button" onClick={() => setSession(null)} type="button" title="返回游戏选择"><LogOut size={18} /></button>
           </div>
         </header>
@@ -759,7 +875,7 @@ function App() {
             </section>
           )}
 
-          {active === "dashboard" ? <Dashboard results={results} accounts={accounts} /> : active === "playerInfo" ? <PlayerInfoPage postWithToken={postWithToken} /> : active === "bindUid" ? <BindUidPage postWithToken={postWithToken} /> : active === "gmState" ? <BanControlPage postWithToken={postWithToken} /> : active === "silence" ? <SilencePage operator={session.operatorAccount} /> : active.startsWith("mail") ? <MailSuitePage active={active as MailSectionKey} postWithToken={postWithToken} setActive={setActive} /> : active.startsWith("gift") ? <GiftSuitePage active={active as GiftSectionKey} postWithToken={postWithToken} /> : active === "notice" ? <NoticePage postWithToken={postWithToken} /> : active === "serverTime" ? <OpenServerPage postWithToken={postWithToken} /> : moduleConfig.status === "pending" ? <UnavailablePanel module={moduleConfig} /> : (
+          {active === "dashboard" ? <Dashboard results={results} accounts={accounts} /> : active === "playerInfo" ? <PlayerInfoPage postWithToken={postWithToken} /> : active === "bindUid" ? <BindUidPage postWithToken={postWithToken} /> : active === "gmState" ? <BanControlPage postWithToken={postWithToken} /> : active === "silence" ? <SilencePage operator={session.operatorAccount} /> : active.startsWith("mail") ? <MailSuitePage active={active as MailSectionKey} canUploadItemTable={auth.isAdmin} postWithToken={postWithToken} setActive={setActive} /> : active.startsWith("gift") ? <GiftSuitePage active={active as GiftSectionKey} canUploadItemTable={auth.isAdmin} postWithToken={postWithToken} /> : active === "notice" ? <NoticePage postWithToken={postWithToken} /> : active === "serverTime" ? <OpenServerPage postWithToken={postWithToken} /> : moduleConfig.status === "pending" ? <UnavailablePanel module={moduleConfig} /> : (
             <>
               <section className="filter-panel">
                 <div className="panel-heading">
@@ -778,6 +894,7 @@ function App() {
       {auth.isAdmin && accountPanelOpen && <AccountPanel accounts={accounts} games={games} canManageAdmins={auth.isRootAdmin} session={session} onAdd={createAccount} onDelete={deleteAccount} onClose={() => setAccountPanelOpen(false)} />}
       {auth.isAdmin && gamePanelOpen && <GamePanel games={games} onAdd={createGame} onDelete={deleteGame} onUpdate={updateGame} onClose={() => setGamePanelOpen(false)} />}
       {auth.isAdmin && logPanelOpen && <UserLogPanel onClose={() => setLogPanelOpen(false)} />}
+      {profilePanelOpen && auth && <ProfilePanel auth={auth} onClose={() => setProfilePanelOpen(false)} onSave={updateProfile} />}
     </main>
     {versionModal}
     </>
@@ -794,6 +911,104 @@ function VersionUpdateModal({ onRelogin }: { onRelogin: () => void }) {
           <p>检测到当前GM后台有新版本，请重新登录后继续操作。</p>
         </div>
         <button className="primary-button" onClick={onRelogin} type="button"><LogOut size={16} />重新登录</button>
+      </section>
+    </div>
+  );
+}
+
+function AvatarImage({ account, avatarUrl, displayName }: { account: string; avatarUrl?: string; displayName?: string }) {
+  const label = (displayName || account || "U").trim().slice(0, 1).toUpperCase();
+  return avatarUrl ? <img alt="" className="avatar-image" src={avatarUrl} /> : <span className="avatar-fallback">{label}</span>;
+}
+
+function ProfilePanel({ auth, onClose, onSave }: { auth: AuthSession; onClose: () => void; onSave: (profile: { displayName: string; avatarUrl: string; oldPassword?: string; newPassword?: string }) => Promise<void> }) {
+  const [displayName, setDisplayName] = React.useState(auth.displayName || auth.operatorAccount);
+  const [avatarUrl, setAvatarUrl] = React.useState(auth.avatarUrl || "");
+  const [oldPassword, setOldPassword] = React.useState("");
+  const [newPassword, setNewPassword] = React.useState("");
+  const [confirmPassword, setConfirmPassword] = React.useState("");
+  const [status, setStatus] = React.useState("");
+  const [saving, setSaving] = React.useState(false);
+
+  const uploadAvatar = (file?: File) => {
+    if (!file) return;
+    if (!file.type.startsWith("image/")) {
+      setStatus("请选择图片文件");
+      return;
+    }
+    if (file.size > 1024 * 1024) {
+      setStatus("头像图片不能超过1MB");
+      return;
+    }
+    const reader = new FileReader();
+    reader.onload = () => setAvatarUrl(String(reader.result ?? ""));
+    reader.onerror = () => setStatus("头像读取失败，请重新选择");
+    reader.readAsDataURL(file);
+  };
+
+  const submit = async () => {
+    if (!displayName.trim()) {
+      setStatus("请输入显示名称");
+      return;
+    }
+    if (oldPassword || newPassword || confirmPassword) {
+      if (auth.isRootAdmin) {
+        setStatus("admin 使用游戏服务端账号登录，密码请在游戏服务端侧维护");
+        return;
+      }
+      if (!oldPassword) {
+        setStatus("请输入原密码");
+        return;
+      }
+      if (newPassword.length < 6) {
+        setStatus("新密码至少6位");
+        return;
+      }
+      if (newPassword !== confirmPassword) {
+        setStatus("两次输入的新密码不一致");
+        return;
+      }
+    }
+    setSaving(true);
+    setStatus("");
+    try {
+      await onSave({ displayName: displayName.trim(), avatarUrl, oldPassword: oldPassword || undefined, newPassword: newPassword || undefined });
+      setStatus("个人信息已保存");
+      setOldPassword("");
+      setNewPassword("");
+      setConfirmPassword("");
+      setTimeout(onClose, 500);
+    } catch (error) {
+      setStatus(error instanceof Error ? error.message : "保存失败");
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  return (
+    <div className="modal-backdrop" role="presentation">
+      <section className="profile-panel" role="dialog" aria-modal="true">
+        <header><div><strong>个人信息设置</strong><span>{auth.operatorAccount}</span></div><button onClick={onClose} type="button">x</button></header>
+        <div className="profile-form">
+          <label className="profile-avatar-upload">
+            <AvatarImage account={auth.operatorAccount} avatarUrl={avatarUrl} displayName={displayName} />
+            <span>点击上传头像</span>
+            <input accept="image/*" onChange={(event) => uploadAvatar(event.target.files?.[0])} type="file" />
+          </label>
+          <label>显示名称<input value={displayName} onChange={(event) => setDisplayName(event.target.value)} /></label>
+          <div className="profile-password-block">
+            <strong>修改密码</strong>
+            {auth.isRootAdmin ? <p>admin 使用游戏服务端账号登录，密码请在游戏服务端侧维护。</p> : (
+              <>
+                <label>原密码<input autoComplete="current-password" type="password" value={oldPassword} onChange={(event) => setOldPassword(event.target.value)} /></label>
+                <label>新密码<input autoComplete="new-password" type="password" value={newPassword} onChange={(event) => setNewPassword(event.target.value)} /></label>
+                <label>确认新密码<input autoComplete="new-password" type="password" value={confirmPassword} onChange={(event) => setConfirmPassword(event.target.value)} /></label>
+              </>
+            )}
+          </div>
+          {status && <div className={status.includes("已保存") ? "profile-status success" : "profile-status"}>{status}</div>}
+          <div className="profile-actions"><button disabled={saving} onClick={() => void submit()} type="button">{saving ? "保存中..." : "保存"}</button><button disabled={saving} onClick={onClose} type="button">取消</button></div>
+        </div>
       </section>
     </div>
   );
@@ -845,9 +1060,17 @@ function LoginScreen({ games, onLogin }: { games: GameConfig[]; onLogin: (sessio
               if (!response.ok) throw new Error(payload.error || "账号或密码错误");
               adminAccount = payload.adminAccount ?? normalizedAccount;
             }
+            let profile: Partial<AuthSession> = {};
+            if (!operator) {
+              const profileResponse = await fetch(`/local-api/profile?account=${encodeURIComponent(operatorAccount)}`);
+              const profilePayload = (await profileResponse.json().catch(() => ({}))) as { profile?: Partial<AuthSession> };
+              profile = profilePayload.profile ?? {};
+            }
             onLogin({
               adminAccount,
               operatorAccount,
+              displayName: operator?.displayName ?? profile.displayName ?? operatorAccount,
+              avatarUrl: operator?.avatarUrl ?? profile.avatarUrl ?? "",
               isAdmin: !operator || Boolean(operator?.isManager),
               isRootAdmin: !operator,
               games: !operator || operator.isManager ? games.map((item) => `${item.name}/${item.serverName}`) : operator.games,
@@ -1393,8 +1616,9 @@ function OpenServerCard({ children, color, desc, title }: { children: React.Reac
   return <section className={`open-server-card ${color}`}><span>admin</span><h3>{title}</h3><p>{desc}</p><div>{children}</div></section>;
 }
 
-function MailSuitePage({ active, postWithToken, setActive }: { active: MailSectionKey; postWithToken: (endpoint: string, body: unknown) => Promise<ApiPostResponse>; setActive: (section: SectionKey) => void }) {
+function MailSuitePage({ active, canUploadItemTable, postWithToken, setActive }: { active: MailSectionKey; canUploadItemTable: boolean; postWithToken: (endpoint: string, body: unknown) => Promise<ApiPostResponse>; setActive: (section: SectionKey) => void }) {
   const [items, setItems] = React.useState<ItemOption[]>([]);
+  const [serverOptions, setServerOptions] = React.useState<ServerOption[]>([]);
   const [templates, setTemplates] = React.useState<MailTemplate[]>([]);
   const [rewardTemplates, setRewardTemplates] = React.useState<RewardTemplate[]>([]);
   const [mailRows, setMailRows] = React.useState<Record<string, unknown>[]>([]);
@@ -1405,20 +1629,24 @@ function MailSuitePage({ active, postWithToken, setActive }: { active: MailSecti
   const [templateQuery, setTemplateQuery] = React.useState("");
   const [editingMailTemplate, setEditingMailTemplate] = React.useState<MailTemplate | undefined>();
   const [editingRewardTemplate, setEditingRewardTemplate] = React.useState<RewardTemplate | undefined>();
+  const [editingMailRow, setEditingMailRow] = React.useState<Record<string, unknown> | undefined>();
   const [status, setStatus] = React.useState("");
 
   const refreshLocalMailData = React.useCallback(async () => {
-    const [itemResponse, templateResponse, rewardResponse] = await Promise.all([
+    const [itemResponse, templateResponse, rewardResponse, serverResponse] = await Promise.all([
       fetch("/local-api/items"),
       fetch("/local-api/mail-templates"),
       fetch("/local-api/reward-templates"),
+      fetch("/local-api/game-servers"),
     ]);
     const itemPayload = (await itemResponse.json().catch(() => ({}))) as { items?: ItemOption[] };
     const templatePayload = (await templateResponse.json().catch(() => ({}))) as { templates?: MailTemplate[] };
     const rewardPayload = (await rewardResponse.json().catch(() => ({}))) as { templates?: RewardTemplate[] };
+    const serverPayload = (await serverResponse.json().catch(() => ({}))) as { servers?: ServerOption[] };
     setItems(itemPayload.items ?? []);
     setTemplates(templatePayload.templates ?? []);
     setRewardTemplates(rewardPayload.templates ?? []);
+    setServerOptions(serverPayload.servers ?? []);
   }, []);
 
   const refreshMailList = React.useCallback(async () => {
@@ -1448,6 +1676,8 @@ function MailSuitePage({ active, postWithToken, setActive }: { active: MailSecti
     setView("list");
     setEditingMailTemplate(undefined);
     setEditingRewardTemplate(undefined);
+    setEditingMailRow(undefined);
+    setStatus("");
   }, [active]);
 
   const uploadItemTable = async (file: File) => {
@@ -1472,7 +1702,7 @@ function MailSuitePage({ active, postWithToken, setActive }: { active: MailSecti
 
   if (active === "mailRewardTemplate") {
     return view === "edit"
-      ? <RewardTemplateEditor items={items} onBack={() => setView("list")} onSaved={() => { setView("list"); setEditingRewardTemplate(undefined); void refreshLocalMailData(); }} onUploadItemTable={uploadItemTable} template={editingRewardTemplate} />
+      ? <RewardTemplateEditor canUploadItemTable={canUploadItemTable} items={items} onBack={() => setView("list")} onSaved={() => { setView("list"); setEditingRewardTemplate(undefined); void refreshLocalMailData(); }} onUploadItemTable={uploadItemTable} template={editingRewardTemplate} />
       : <RewardTemplateList templates={rewardTemplates} onCreate={() => { setEditingRewardTemplate(undefined); setView("edit"); }} onEdit={(template) => { setEditingRewardTemplate(template); setView("edit"); }} onDelete={async (template) => {
         if (!window.confirm(`确认删除奖励模板「${template.title}」？`)) return;
         await fetch(`/local-api/reward-templates/${encodeURIComponent(template.id)}`, { method: "DELETE" });
@@ -1484,9 +1714,12 @@ function MailSuitePage({ active, postWithToken, setActive }: { active: MailSecti
     return (
       <MailEditor
         global={active === "mailGlobal"}
+        canUploadItemTable={canUploadItemTable}
         items={items}
+        serverOptions={serverOptions}
         rewardTemplates={rewardTemplates}
         templates={templates}
+        initialMail={editingMailRow}
         onBack={() => setView("list")}
         onSubmit={async (body) => {
           const result = await postWithToken("/gmMailAdd", body);
@@ -1510,6 +1743,7 @@ function MailSuitePage({ active, postWithToken, setActive }: { active: MailSecti
           const submittedTyp = Number(getObject(body)?.Typ);
           const submittedTargets = getArray(getObject(body)?.TargetID);
           setView("list");
+          setEditingMailRow(undefined);
           setLocalMailRows((current) => [localRow, ...current.filter((row) => String(row.Id) !== String(localRow.Id))].slice(0, 20));
           await refreshMailList();
           if ((submittedTyp === 2 || (submittedTyp === 1 && submittedTargets.length === 0)) && active !== "mailGlobal") {
@@ -1528,6 +1762,7 @@ function MailSuitePage({ active, postWithToken, setActive }: { active: MailSecti
   return (
     <MailListPage
       active={active}
+      serverOptions={serverOptions}
       mailRows={mailRows}
       localMailRows={localMailRows}
       recordTab={recordTab}
@@ -1535,7 +1770,8 @@ function MailSuitePage({ active, postWithToken, setActive }: { active: MailSecti
       status={status}
       userIdQuery={userIdQuery}
       setUserIdQuery={setUserIdQuery}
-      onCreate={() => setView("edit")}
+      onCreate={() => { setEditingMailRow(undefined); setView("edit"); }}
+      onEdit={(row) => { setEditingMailRow(row); setView("edit"); }}
       onDelete={async (id) => {
         const result = await postWithToken("/gmMailDel", { Id: id });
         const error = apiBusinessError(result);
@@ -1548,7 +1784,7 @@ function MailSuitePage({ active, postWithToken, setActive }: { active: MailSecti
   );
 }
 
-function MailListPage({ active, localMailRows, mailRows, onCreate, onDelete, onRefresh, recordTab, setRecordTab, setUserIdQuery, status, userIdQuery }: { active: MailSectionKey; localMailRows: Record<string, unknown>[]; mailRows: Record<string, unknown>[]; onCreate: () => void; onDelete: (id: string) => Promise<void>; onRefresh: () => void; recordTab: "mail" | "claim"; setRecordTab: (tab: "mail" | "claim") => void; setUserIdQuery: (value: string) => void; status: string; userIdQuery: string }) {
+function MailListPage({ active, localMailRows, mailRows, onCreate, onDelete, onEdit, onRefresh, recordTab, serverOptions, setRecordTab, setUserIdQuery, status, userIdQuery }: { active: MailSectionKey; localMailRows: Record<string, unknown>[]; mailRows: Record<string, unknown>[]; onCreate: () => void; onDelete: (id: string) => Promise<void>; onEdit: (row: Record<string, unknown>) => void; onRefresh: () => void; recordTab: "mail" | "claim"; serverOptions: ServerOption[]; setRecordTab: (tab: "mail" | "claim") => void; setUserIdQuery: (value: string) => void; status: string; userIdQuery: string }) {
   const global = active === "mailGlobal";
   const mergedRows = [...localMailRows, ...mailRows.filter((row) => !localMailRows.some((localRow) => String(localRow.Id) === String(row.Id)))];
   const rows = mergedRows.filter((row) => {
@@ -1561,7 +1797,7 @@ function MailListPage({ active, localMailRows, mailRows, onCreate, onDelete, onR
     if (!userIdQuery.trim()) return true;
     return formatCell(row.TargetID).includes(userIdQuery.trim());
   });
-  const listColumns = ["ID", "模板名称", "用户 ID", "状态", "时间", "操作"];
+  const listColumns = ["ID", "模板名称", "目标", "状态", "时间", "操作"];
 
   if (global && recordTab === "claim") {
     return (
@@ -1578,7 +1814,7 @@ function MailListPage({ active, localMailRows, mailRows, onCreate, onDelete, onR
       {global && <div className="mail-tabs"><button className="active" type="button">全局邮件</button><button onClick={() => setRecordTab("claim")} type="button">领取记录</button></div>}
       {!global && <div className="mail-filter-line"><label>用户 ID：<input value={userIdQuery} onChange={(event) => setUserIdQuery(event.target.value)} /></label><button onClick={onRefresh} type="button"><Search size={14} />Search</button></div>}
       <section className="mail-table-card">
-        <button className="mail-primary-button" onClick={onCreate} type="button">新<Plus size={18} /></button>
+        <button className="mail-primary-button" onClick={onCreate} type="button">新建</button>
         <MailDataTable
           columns={listColumns}
           rows={rows.map((row) => {
@@ -1586,7 +1822,8 @@ function MailListPage({ active, localMailRows, mailRows, onCreate, onDelete, onR
             const targetIds = getArray(row.TargetID);
             const typ = Number(row.Typ);
             const isServerMail = typ === 2;
-            const target = targetIds.length ? formatCell(row.TargetID) : "全服";
+            const serverNames = targetIds.map((targetId) => serverOptions.find((server) => server.id === Number(targetId))?.name ?? `游戏内区服 ${String(targetId)}`);
+            const target = targetIds.length ? isServerMail ? serverNames.join(", ") : `用户 ${formatCell(row.TargetID)}` : "全服";
             const typeName = isServerMail ? "区服" : typ === 3 || (!typ && targetIds.length > 0) ? "个人" : "全局";
             const title = formatCell(row.Titel ?? row.Title ?? "自定义邮件");
             const state = Number(row.St);
@@ -1596,10 +1833,10 @@ function MailListPage({ active, localMailRows, mailRows, onCreate, onDelete, onR
             return {
               ID: <span className="mail-id-cell"><span>{id}</span><em>{typeName}</em></span>,
               模板名称: title,
-              "用户 ID": target,
+              目标: target,
               状态: statusText,
-              时间: <span className="mail-time-cell"><span>注册开始: {formatTimestamp(row.RegtBegin)}</span><span>注册结束: {formatTimestamp(regEnd)}</span><span>过期时间: {formatTimestamp(row.Et)}</span><span>创建时间: {formatTimestampValue(createdAt)}</span></span>,
-              操作: <div className="mail-action-buttons"><button onClick={() => void onDelete(id)} type="button">撤回</button></div>,
+              时间: <span className="mail-time-cell"><span>注册开始: {formatTimestamp(row.RegtBegin)}</span><span>注册结束: {formatTimestamp(regEnd)}</span><span>生效时间: {formatTimestamp(row.St)}</span><span>过期时间: {formatTimestamp(row.Et)}</span><span>创建时间: {formatTimestampValue(createdAt)}</span></span>,
+              操作: <div className="mail-action-buttons"><button onClick={() => onEdit(row)} type="button">编辑</button><button onClick={() => void onDelete(id)} type="button">撤回</button></div>,
             };
           })}
         />
@@ -1618,46 +1855,54 @@ function MailDataTable({ columns, rows }: { columns: string[]; rows: Array<Recor
   );
 }
 
-function MailEditor({ global, items, onBack, onSubmit, onUploadItemTable, rewardTemplates, templates }: { global: boolean; items: ItemOption[]; onBack: () => void; onSubmit: (body: unknown) => Promise<string | void>; onUploadItemTable: (file: File) => Promise<void>; rewardTemplates: RewardTemplate[]; templates: MailTemplate[] }) {
+function MailEditor({ canUploadItemTable, global, initialMail, items, onBack, onSubmit, onUploadItemTable, rewardTemplates, serverOptions, templates }: { canUploadItemTable: boolean; global: boolean; initialMail?: Record<string, unknown>; items: ItemOption[]; onBack: () => void; onSubmit: (body: unknown) => Promise<string | void>; onUploadItemTable: (file: File) => Promise<void>; rewardTemplates: RewardTemplate[]; serverOptions: ServerOption[]; templates: MailTemplate[] }) {
   const now = new Date();
   const [mailType, setMailType] = React.useState(global ? "global" : "personal");
   const [templateId, setTemplateId] = React.useState("custom");
-  const [templateLanguage, setTemplateLanguage] = React.useState(defaultMailLanguage);
   const [rewardTemplateId, setRewardTemplateId] = React.useState("custom");
-  const [title, setTitle] = React.useState("");
-  const [body, setBody] = React.useState("");
-  const [targetIds, setTargetIds] = React.useState("");
-  const [rewards, setRewards] = React.useState<MailRewardItem[]>([{ itemId: "", count: "0" }]);
-  const [startTime, setStartTime] = React.useState(toDatetimeLocal(now));
-  const [endTime, setEndTime] = React.useState(MAIL_DEFAULT_EXPIRE);
-  const [testUser, setTestUser] = React.useState("");
+  const [title, setTitle] = React.useState(String(initialMail?.Titel ?? initialMail?.Title ?? ""));
+  const [body, setBody] = React.useState(String(initialMail?.Body ?? ""));
+  const [targetIds, setTargetIds] = React.useState(getArray(initialMail?.TargetID).join(","));
+  const [rewards, setRewards] = React.useState<MailRewardItem[]>(() => {
+    const raw = getArray(initialMail?.ItemLst);
+    const parsed: MailRewardItem[] = [];
+    for (let index = 0; index < raw.length; index += 2) {
+      const itemId = Number(raw[index]);
+      const count = Number(raw[index + 1]);
+      if (Number.isFinite(itemId) && Number.isFinite(count) && itemId > 0 && count > 0) parsed.push({ itemId: String(itemId), count: String(count) });
+    }
+    return parsed.length ? parsed : [{ itemId: "", count: "0" }];
+  });
+  const [startTime, setStartTime] = React.useState(secondsToDatetimeLocal(initialMail?.St) || toDatetimeLocal(now));
+  const [endTime, setEndTime] = React.useState(secondsToDatetimeLocal(initialMail?.Et) || MAIL_DEFAULT_EXPIRE);
   const [filterRows, setFilterRows] = React.useState<Array<{ id: number; field: string; op: string; value: string }>>([]);
   const [error, setError] = React.useState("");
   const [submitting, setSubmitting] = React.useState(false);
   const isGlobalMail = mailType === "global";
   const defaultFilterValue = (field: string, op = "=") => {
-    if (field === "regTime") return op === "<=" ? defaultRegEndTime() : MAIL_DEFAULT_REG_BEGIN;
+    if (field === "regTime") return (op === "<=" ? defaultRegEndTime() : MAIL_DEFAULT_REG_BEGIN).slice(0, 10);
     return "";
   };
   const filterFieldOptions = [
     { value: "system", label: "系统" },
     { value: "version", label: "app版本" },
     { value: "regTime", label: "注册时间" },
-    { value: "server", label: "游戏内区服" },
+    { value: "server", label: "游戏内区服", disabled: !isGlobalMail },
     { value: "language", label: "app语言", disabled: true },
     { value: "country", label: "国家", disabled: true },
   ];
 
   const selectedTemplate = templates.find((template) => template.id === templateId);
   const selectedRewardTemplate = rewardTemplates.find((template) => template.id === rewardTemplateId);
+  const selectedTemplateContents = selectedTemplate?.contents;
 
   React.useEffect(() => {
     if (templateId !== "custom" && selectedTemplate) {
-      const localized = selectedTemplate.contents?.[templateLanguage];
-      setTitle(localized?.title ?? selectedTemplate.title);
-      setBody(localized?.body ?? selectedTemplate.body);
+      const content = templatePrimaryContent(selectedTemplate);
+      setTitle(content.title ?? selectedTemplate.title);
+      setBody(content.body ?? selectedTemplate.body);
     }
-  }, [selectedTemplate, templateId, templateLanguage]);
+  }, [selectedTemplate, templateId]);
 
   React.useEffect(() => {
     if (rewardTemplateId !== "custom" && selectedRewardTemplate) {
@@ -1685,11 +1930,12 @@ function MailEditor({ global, items, onBack, onSubmit, onUploadItemTable, reward
       setError(rewardValidation.message ?? "请填写有效的奖励道具和数量，或选择无奖励");
       return;
     }
-    const versionList = isGlobalMail ? filterRows.filter((row) => row.field === "version").flatMap((row) => toFlexibleNumberArray(row.value)) : [];
-    const platformList = isGlobalMail ? filterRows.filter((row) => row.field === "system").flatMap((row) => toFlexibleNumberArray(row.value)) : [];
+    const conditionRows = filterRows.filter((row) => isGlobalMail || row.field !== "server");
+    const versionList = conditionRows.filter((row) => row.field === "version").flatMap((row) => toVersionNumberArray(row.value));
+    const platformList = conditionRows.filter((row) => row.field === "system").flatMap((row) => toFlexibleNumberArray(row.value));
     const serverTargetIds = isGlobalMail ? filterRows.filter((row) => row.field === "server").flatMap((row) => toFlexibleNumberArray(row.value)) : [];
-    const regBeginValues = isGlobalMail ? filterRows.filter((row) => row.field === "regTime" && row.op === ">=" && row.value).map((row) => parseDatetimeLocalSeconds(row.value)) : [];
-    const regEndValues = isGlobalMail ? filterRows.filter((row) => row.field === "regTime" && row.op === "<=" && row.value).map((row) => parseDatetimeLocalSeconds(row.value)) : [];
+    const regBeginValues = conditionRows.filter((row) => row.field === "regTime" && row.op === ">=" && row.value).map((row) => parseDatetimeLocalSeconds(dateToDatetimeLocal(row.value)));
+    const regEndValues = conditionRows.filter((row) => row.field === "regTime" && row.op === "<=" && row.value).map((row) => parseDatetimeLocalSeconds(dateToDatetimeLocal(row.value, true)));
     const regBeginSeconds = regBeginValues[0] ?? parseDatetimeLocalSeconds(MAIL_DEFAULT_REG_BEGIN);
     const regEndSeconds = regEndValues[0] ?? parseDatetimeLocalSeconds(defaultRegEndTime());
     if (regBeginValues.some((value) => !value) || regEndValues.some((value) => !value)) {
@@ -1700,12 +1946,25 @@ function MailEditor({ global, items, onBack, onSubmit, onUploadItemTable, reward
       setError("注册结束时间必须晚于注册开始时间");
       return;
     }
-    if (isGlobalMail && filterRows.some((row) => row.field !== "regTime" && row.op !== "=" && row.value.trim())) {
+    if (conditionRows.some((row) => row.field !== "regTime" && row.op !== "=" && row.value.trim())) {
       setError("当前邮件接口只支持系统、版本、游戏内区服的等于条件，范围和排除条件暂不支持保存");
+      return;
+    }
+    if (conditionRows.some((row) => row.field === "version" && row.value.trim() && !toVersionNumberArray(row.value).length)) {
+      setError("APP版本请填写带小数点的版本号，例如 1.8.4.4");
       return;
     }
     if (isGlobalMail && filterRows.some((row) => row.field === "server" && row.value.trim()) && !serverTargetIds.length) {
       setError("请输入有效的游戏内区服ID");
+      return;
+    }
+    const startSeconds = parseDatetimeLocalSeconds(startTime);
+    if (!startSeconds) {
+      setError("请选择有效的生效时间");
+      return;
+    }
+    if (endSeconds <= startSeconds) {
+      setError("过期时间必须晚于生效时间");
       return;
     }
     const mailTyp = isGlobalMail ? serverTargetIds.length ? 2 : 1 : 3;
@@ -1724,7 +1983,7 @@ function MailEditor({ global, items, onBack, onSubmit, onUploadItemTable, reward
         Titel: title,
         Body: body,
         BodyData: [],
-        BodyData2: [],
+        BodyData2: selectedTemplateContents ? [JSON.stringify({ type: "multiLanguage", contents: selectedTemplateContents })] : [],
         ItemLst: rewardValidation.itemList,
         Platform: platformList,
         Version: versionList,
@@ -1744,8 +2003,7 @@ function MailEditor({ global, items, onBack, onSubmit, onUploadItemTable, reward
         <div className="mail-form">
           <div className="mail-form-row"><span>邮件类型</span><input disabled value={isGlobalMail ? "全局邮件" : "个人邮件"} /></div>
           <label className="mail-form-row"><span>邮件模板</span><select value={templateId} onChange={(event) => setTemplateId(event.target.value)}><option value="custom">自定义</option>{templates.map((template) => <option key={template.id} value={template.id}>{template.name}</option>)}</select></label>
-          {templateId !== "custom" && <label className="mail-form-row"><span>模板语言</span><select value={templateLanguage} onChange={(event) => setTemplateLanguage(event.target.value)}>{mailLanguages.map((language) => <option key={language} value={language}>{language}</option>)}</select></label>}
-          {isGlobalMail && <div className="mail-form-row mail-filter-builder">
+          <div className="mail-form-row mail-filter-builder">
             <span>条件</span>
             <div className="mail-condition-list">
               {filterRows.length === 0 && <div className="mail-condition-empty">默认无条件，邮件会发给当前类型下的全部目标。</div>}
@@ -1755,7 +2013,7 @@ function MailEditor({ global, items, onBack, onSubmit, onUploadItemTable, reward
                 return (
                   <div className="mail-condition-row" key={row.id}>
                     <select value={row.field} onChange={(event) => {
-                      const nextField = event.target.value;
+                      const nextField = !isGlobalMail && event.target.value === "server" ? "version" : event.target.value;
                       const nextOp = nextField === "regTime" ? ">=" : "=";
                       setFilterRows((current) => current.map((item) => item.id === row.id ? { ...item, field: nextField, op: nextOp, value: defaultFilterValue(nextField, nextOp) } : item));
                     }}>
@@ -1774,7 +2032,7 @@ function MailEditor({ global, items, onBack, onSubmit, onUploadItemTable, reward
                     ) : (
                       <div className="mail-condition-op" role="group" aria-label="条件操作">
                         <button className={row.op === "=" ? "active" : ""} onClick={() => setFilterRows((current) => current.map((item) => item.id === row.id ? { ...item, op: "=" } : item))} type="button">=</button>
-                        <button disabled type="button">排除</button>
+                        <button className={row.op === "!=" ? "active" : ""} onClick={() => setFilterRows((current) => current.map((item) => item.id === row.id ? { ...item, op: "!=" } : item))} type="button">排除</button>
                       </div>
                     )}
                     {row.field === "system" ? (
@@ -1784,35 +2042,39 @@ function MailEditor({ global, items, onBack, onSubmit, onUploadItemTable, reward
                         <option value="2">iOS</option>
                       </select>
                     ) : row.field === "regTime" ? (
-                      <input type="datetime-local" value={row.value} onChange={(event) => setFilterRows((current) => current.map((item) => item.id === row.id ? { ...item, value: event.target.value } : item))} />
+                      <input type="date" value={row.value ? row.value.slice(0, 10) : ""} onChange={(event) => setFilterRows((current) => current.map((item) => item.id === row.id ? { ...item, value: event.target.value } : item))} />
+                    ) : row.field === "server" && serverOptions.length ? (
+                      <select value={row.value} onChange={(event) => setFilterRows((current) => current.map((item) => item.id === row.id ? { ...item, value: event.target.value } : item))}>
+                        <option value="">请选择游戏内区服</option>
+                        {serverOptions.map((server) => <option key={server.id} value={server.id}>{server.name}</option>)}
+                      </select>
                     ) : (
-                      <input disabled={unsupported} value={row.value} onChange={(event) => setFilterRows((current) => current.map((item) => item.id === row.id ? { ...item, value: event.target.value } : item))} placeholder={unsupported ? "当前接口暂未开放" : row.field === "version" ? "例如 1.8.1 或 10800" : row.field === "server" ? "例如 12 或 1,2" : "例如 1,2"} />
+                      <input disabled={unsupported} value={row.value} onChange={(event) => setFilterRows((current) => current.map((item) => item.id === row.id ? { ...item, value: event.target.value } : item))} placeholder={unsupported ? "当前接口暂未开放" : row.field === "version" ? "例如 1.8.4.4" : row.field === "server" ? "例如 12 或 1,2" : "例如 1,2"} />
                     )}
                     <button className="mail-condition-remove" onClick={() => setFilterRows((current) => current.filter((item) => item.id !== row.id))} type="button">删除</button>
                   </div>
                 );
               })}
               <button className="mail-add-condition" onClick={() => setFilterRows((current) => [...current, { id: Date.now() + current.length, field: "version", op: "=", value: "" }])} type="button">新增条件</button>
-              <small className="mail-condition-hint">填写“游戏内区服”后，会按接口 Typ=2 将 TargetID 作为区服ID发送。</small>
+              <small className="mail-condition-hint">{isGlobalMail ? "多个条件同时填写时为且的关系。填写“游戏内区服”后，会按接口 Typ=2 将 TargetID 作为区服ID发送。" : "多个条件同时填写时为且的关系。个人邮件不会提交游戏内区服条件。"}</small>
             </div>
-          </div>}
+          </div>
           <label className="mail-form-row"><span>奖励模板</span><select value={rewardTemplateId} onChange={(event) => setRewardTemplateId(event.target.value)}><option value="custom">自定义</option>{rewardTemplates.map((template) => <option key={template.id} value={template.id}>{template.title}</option>)}</select></label>
-          <RewardRows items={items} onUploadItemTable={onUploadItemTable} rewards={rewards} setRewards={setRewards} />
+          <RewardRows canUploadItemTable={canUploadItemTable} items={items} onUploadItemTable={onUploadItemTable} rewards={rewards} setRewards={setRewards} />
           {!isGlobalMail && <label className="mail-form-row mail-textarea-row"><span>用户 ID</span><textarea value={targetIds} onChange={(event) => setTargetIds(event.target.value)} /></label>}
-          {isGlobalMail && <><label className="mail-form-row"><span>测试用户</span><input disabled value={testUser} onChange={(event) => setTestUser(event.target.value)} placeholder="当前接口暂不支持" /></label><small className="mail-form-hint">当前服务器接口暂不支持添加测试用户</small></>}
           <label className="mail-form-row"><span>邮件标题</span><input value={title} onChange={(event) => setTitle(event.target.value)} /></label>
           <label className="mail-form-row mail-textarea-row"><span>邮件内容</span><textarea value={body} onChange={(event) => setBody(event.target.value)} /></label>
-          <label className="mail-form-row"><span>生效时间</span><input disabled type="datetime-local" value={startTime} onChange={(event) => setStartTime(event.target.value)} /><em>立即生效，当前接口暂不支持定时</em></label>
-          <label className="mail-form-row"><span>过期时间</span><input type="datetime-local" value={endTime} onChange={(event) => setEndTime(event.target.value)} /><em>北京时间 {formatBeijingTime(endTime)}</em></label>
+          <label className="mail-form-row"><span>生效时间</span><input type="datetime-local" value={startTime} onChange={(event) => setStartTime(event.target.value)} /><em>北京时间 {formatBeijingTime(startTime)}</em></label>
+          <label className="mail-form-row"><span>过期时间</span><input type="datetime-local" value={endTime} onChange={(event) => setEndTime(event.target.value)} /><em>北京时间 {formatBeijingTime(endTime)}，{formatTimeDistance(endTime)}</em></label>
           {error && <div className="mail-form-error">{error}</div>}
-          <div className="mail-form-actions"><button disabled={submitting} onClick={() => void submit()} type="button">{submitting ? "保存中..." : "保存"}</button><button disabled={submitting} onClick={onBack} type="button">取消</button></div>
+          <div className="mail-form-actions"><button disabled={submitting} onClick={() => void submit()} type="button">{submitting ? "发送中..." : "发送"}</button><button disabled={submitting} onClick={onBack} type="button">取消</button></div>
         </div>
       </div>
     </section>
   );
 }
 
-function RewardRows({ items, onUploadItemTable, rewards, setRewards }: { items: ItemOption[]; onUploadItemTable: (file: File) => Promise<void>; rewards: MailRewardItem[]; setRewards: (items: MailRewardItem[]) => void }) {
+function RewardRows({ canUploadItemTable = true, items, onUploadItemTable, rewards, setRewards }: { canUploadItemTable?: boolean; items: ItemOption[]; onUploadItemTable: (file: File) => Promise<void>; rewards: MailRewardItem[]; setRewards: (items: MailRewardItem[]) => void }) {
   const [uploading, setUploading] = React.useState(false);
   const [uploadError, setUploadError] = React.useState("");
   const updateReward = (index: number, patch: Partial<MailRewardItem>) => {
@@ -1832,7 +2094,7 @@ function RewardRows({ items, onUploadItemTable, rewards, setRewards }: { items: 
         </div>
       ))}
       <div className="mail-form-row mail-add-reward-row"><span /><button className="mail-add-reward" onClick={() => setRewards([...rewards, { itemId: "", count: "0" }])} type="button">新增</button></div>
-      <div className="mail-form-row"><span /><label className={`mail-upload-link ${uploading ? "disabled" : ""}`}>{uploading ? "上传中..." : "上传Item表"}<input accept=".xlsx,.xls" disabled={uploading} onChange={(event) => {
+      {canUploadItemTable && <div className="mail-form-row"><span /><label className={`mail-upload-link ${uploading ? "disabled" : ""}`}>{uploading ? "上传中..." : "上传Item表"}<input accept=".xlsx,.xls" disabled={uploading} onChange={(event) => {
         const file = event.target.files?.[0];
         event.currentTarget.value = "";
         if (!file) return;
@@ -1840,6 +2102,7 @@ function RewardRows({ items, onUploadItemTable, rewards, setRewards }: { items: 
         setUploadError("");
         void onUploadItemTable(file).catch((error) => setUploadError(error instanceof Error ? error.message : "上传Item表失败")).finally(() => setUploading(false));
       }} type="file" /></label><small>{uploadError || (items.length ? `已加载 ${items.length} 个道具` : "未上传道具表")}</small></div>
+      }
     </div>
   );
 }
@@ -1884,42 +2147,47 @@ function ItemInput({ items, onChange, value }: { items: ItemOption[]; onChange: 
   );
 }
 
-function templateLanguageSummary(template: MailTemplate) {
-  const contents = template.contents ?? {};
-  const languages = mailLanguages.filter((language) => {
-    const content = contents[language];
-    return Boolean(content?.title?.trim() || content?.body?.trim());
-  });
-  return languages.length ? languages.join("、") : defaultMailLanguage;
-}
-
 function MailTemplateList({ onCreate, onDelete, onEdit, query, setQuery, templates }: { onCreate: () => void; onDelete: (template: MailTemplate) => Promise<void>; onEdit: (template: MailTemplate) => void; query: string; setQuery: (value: string) => void; templates: MailTemplate[] }) {
   const rows = templates.filter((template) => !query.trim() || template.name.includes(query.trim()));
-  return <section className="mail-page"><div className="mail-filter-line"><label>模板名称：<input value={query} onChange={(event) => setQuery(event.target.value)} /></label><button type="button"><Search size={14} />Search</button></div><section className="mail-table-card"><button className="mail-primary-button" onClick={onCreate} type="button">新建</button><MailDataTable columns={["ID", "名称", "语言", "创建时间", "更新时间", "操作"]} rows={rows.map((template) => ({ ID: template.id, 名称: template.name, 语言: templateLanguageSummary(template), 创建时间: formatTimestampValue(template.createdAt), 更新时间: formatTimestampValue(template.updatedAt), 操作: <div className="mail-action-buttons"><button onClick={() => onEdit(template)} type="button">编辑</button><button onClick={() => void onDelete(template)} type="button">删除</button></div> }))} /></section></section>;
+  return <section className="mail-page"><div className="mail-filter-line"><label>模板名称：<input value={query} onChange={(event) => setQuery(event.target.value)} /></label><button type="button"><Search size={14} />Search</button></div><section className="mail-table-card"><button className="mail-primary-button" onClick={onCreate} type="button">新建</button><MailDataTable columns={["ID", "名称", "标题", "创建时间", "更新时间", "操作"]} rows={rows.map((template) => ({ ID: template.id, 名称: <span className="mail-ellipsis-cell" title={template.name}>{template.name}</span>, 标题: <span className="mail-ellipsis-cell" title={templatePrimaryContent(template).title}>{templatePrimaryContent(template).title || "暂无数据"}</span>, 创建时间: formatTimestampValue(template.createdAt), 更新时间: formatTimestampValue(template.updatedAt), 操作: <div className="mail-action-buttons"><button onClick={() => onEdit(template)} type="button">编辑</button><button onClick={() => void onDelete(template)} type="button">删除</button></div> }))} /></section></section>;
 }
 
 function MailTemplateEditor({ onBack, onSaved, template }: { onBack: () => void; onSaved: () => void; template?: MailTemplate }) {
   const [name, setName] = React.useState(template?.name ?? "");
-  const [activeLanguage, setActiveLanguage] = React.useState(defaultMailLanguage);
   const [error, setError] = React.useState("");
   const [saving, setSaving] = React.useState(false);
+  const [activeLanguage, setActiveLanguage] = React.useState(defaultMailLanguage);
   const [contents, setContents] = React.useState<Record<string, MailTemplateContent>>(() => {
     const initial = Object.fromEntries(mailLanguages.map((language) => [language, { title: "", body: "" }])) as Record<string, MailTemplateContent>;
     if (template?.contents) {
-      for (const language of mailLanguages) {
-        initial[language] = { title: template.contents[language]?.title ?? "", body: template.contents[language]?.body ?? "" };
-      }
-      if (!initial[defaultMailLanguage].title && !initial[defaultMailLanguage].body) {
-        initial[defaultMailLanguage] = { title: template.title ?? "", body: template.body ?? "" };
-      }
-    } else {
-      initial[defaultMailLanguage] = { title: template?.title ?? "", body: template?.body ?? "" };
+      for (const language of mailLanguages) initial[language] = { title: template.contents[language]?.title ?? "", body: template.contents[language]?.body ?? "" };
+    }
+    if (!initial[defaultMailLanguage].title && !initial[defaultMailLanguage].body && template) {
+      initial[defaultMailLanguage] = { title: template.title ?? "", body: template.body ?? "" };
     }
     return initial;
   });
   const activeContent = contents[activeLanguage] ?? { title: "", body: "" };
-  const updateActiveContent = (patch: Partial<MailTemplateContent>) => {
+  const updateContent = (patch: Partial<MailTemplateContent>) => {
     setContents((current) => ({ ...current, [activeLanguage]: { ...(current[activeLanguage] ?? { title: "", body: "" }), ...patch } }));
+  };
+  const downloadTemplate = () => {
+    const workbook = XLSX.utils.book_new();
+    const header = ["模板名称", ...mailLanguages.flatMap((language) => [`${language}标题`, `${language}内容`])];
+    const example = ["示例模板", ...mailLanguages.flatMap((language) => [`${language}邮件标题`, `${language}邮件内容`])];
+    const sheet = XLSX.utils.aoa_to_sheet([header, example]);
+    XLSX.utils.book_append_sheet(workbook, sheet, "邮件模板");
+    XLSX.writeFile(workbook, "邮件模板导入模板.xlsx");
+  };
+  const uploadTemplate = async (file: File) => {
+    try {
+      const parsed = await parseMailTemplateFile(file);
+      if (parsed.name && !name.trim()) setName(parsed.name);
+      setContents(parsed.contents);
+      setError("");
+    } catch (uploadError) {
+      setError(uploadError instanceof Error ? uploadError.message : "上传模板失败");
+    }
   };
   const save = async () => {
     if (saving) return;
@@ -1928,16 +2196,19 @@ function MailTemplateEditor({ onBack, onSaved, template }: { onBack: () => void;
       setError("请输入模板名称");
       return;
     }
-    const hasContent = Object.values(contents).some((content) => content.title.trim() && content.body.trim());
+    if (cleanName.length > MAX_TEMPLATE_NAME_LENGTH) {
+      setError(`模板名称最多${MAX_TEMPLATE_NAME_LENGTH}个字符`);
+      return;
+    }
+    const cleanedContents = Object.fromEntries(mailLanguages.map((language) => [language, { title: contents[language]?.title.trim() ?? "", body: contents[language]?.body.trim() ?? "" }])) as Record<string, MailTemplateContent>;
+    const hasContent = Object.values(cleanedContents).some((content) => content.title && content.body);
     if (!hasContent) {
       setError("请至少填写一个语言的邮件标题和邮件内容");
       return;
     }
     const incompleteLanguage = mailLanguages.find((language) => {
-      const content = contents[language];
-      const hasTitle = Boolean(content?.title.trim());
-      const hasBody = Boolean(content?.body.trim());
-      return hasTitle !== hasBody;
+      const content = cleanedContents[language];
+      return Boolean(content.title) !== Boolean(content.body);
     });
     if (incompleteLanguage) {
       setError(`${incompleteLanguage} 的邮件标题和邮件内容需要同时填写`);
@@ -1945,11 +2216,9 @@ function MailTemplateEditor({ onBack, onSaved, template }: { onBack: () => void;
     }
     setError("");
     setSaving(true);
-    const mainContent = contents[defaultMailLanguage]?.title.trim() && contents[defaultMailLanguage]?.body.trim()
-      ? contents[defaultMailLanguage]
-      : Object.values(contents).find((content) => content.title.trim() && content.body.trim()) ?? { title: "", body: "" };
     try {
-      const response = await fetch("/local-api/mail-templates", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ id: template?.id, name: cleanName, title: mainContent.title, body: mainContent.body, contents }) });
+      const primary = cleanedContents[defaultMailLanguage].title && cleanedContents[defaultMailLanguage].body ? cleanedContents[defaultMailLanguage] : Object.values(cleanedContents).find((content) => content.title && content.body) ?? { title: "", body: "" };
+      const response = await fetch("/local-api/mail-templates", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ id: template?.id, name: cleanName, title: primary.title, body: primary.body, contents: cleanedContents }) });
       if (!response.ok) throw new Error(`HTTP ${response.status}`);
       onSaved();
     } catch (saveError) {
@@ -1958,10 +2227,35 @@ function MailTemplateEditor({ onBack, onSaved, template }: { onBack: () => void;
       setSaving(false);
     }
   };
-  return <section className="mail-edit-page"><div className="mail-edit-card"><header>邮件模板</header><div className="mail-template-name"><label>模板名称<input value={name} onChange={(event) => setName(event.target.value)} placeholder="请输入模板名称" /></label></div><div className="mail-language-tabs">{mailLanguages.map((language) => <button className={activeLanguage === language ? "active" : ""} key={language} onClick={() => setActiveLanguage(language)} type="button">{language}</button>)}</div><div className="mail-form mail-template-form"><label className="mail-form-row"><span>邮件标题</span><input value={activeContent.title} onChange={(event) => updateActiveContent({ title: event.target.value })} placeholder={`请输入${activeLanguage}邮件标题`} /></label><label className="mail-form-row mail-template-body"><span>邮件内容</span><textarea value={activeContent.body} onChange={(event) => updateActiveContent({ body: event.target.value })} placeholder={`请输入${activeLanguage}邮件内容`} /></label><label className="mail-upload-link">上传Excel<input accept=".xlsx,.xls" type="file" /></label>{error && <div className="mail-form-error">{error}</div>}<div className="mail-form-actions"><button disabled={saving} onClick={() => void save()} type="button">{saving ? "保存中..." : "保存"}</button><button disabled={saving} onClick={onBack} type="button">取消</button></div></div></div></section>;
+  return (
+    <section className="mail-edit-page">
+      <div className="mail-edit-card">
+        <header>邮件模板</header>
+        <div className="mail-template-name"><label>模板名称<input maxLength={MAX_TEMPLATE_NAME_LENGTH} value={name} onChange={(event) => setName(event.target.value)} placeholder="请输入模板名称" /></label><small>{name.length}/{MAX_TEMPLATE_NAME_LENGTH}</small></div>
+        <div className="mail-language-tabs">{mailLanguages.map((language) => <button className={activeLanguage === language ? "active" : ""} key={language} onClick={() => setActiveLanguage(language)} type="button">{language}</button>)}</div>
+        <div className="mail-form mail-template-form">
+          <label className="mail-form-row"><span>邮件标题</span><input value={activeContent.title} onChange={(event) => updateContent({ title: event.target.value })} placeholder={`请输入${activeLanguage}邮件标题`} /></label>
+          <label className="mail-form-row mail-template-body"><span>邮件内容</span><textarea value={activeContent.body} onChange={(event) => updateContent({ body: event.target.value })} placeholder={`请输入${activeLanguage}邮件内容`} /></label>
+          <div className="mail-form-row">
+            <span>模板文件</span>
+            <div className="mail-template-file-actions">
+              <button onClick={downloadTemplate} type="button">下载模板</button>
+              <label className="mail-upload-link">上传Excel<input accept=".xlsx,.xls,.csv" onChange={(event) => {
+                const file = event.target.files?.[0];
+                event.currentTarget.value = "";
+                if (file) void uploadTemplate(file);
+              }} type="file" /></label>
+            </div>
+          </div>
+          {error && <div className="mail-form-error">{error}</div>}
+          <div className="mail-form-actions"><button disabled={saving} onClick={() => void save()} type="button">{saving ? "保存中..." : "保存"}</button><button disabled={saving} onClick={onBack} type="button">取消</button></div>
+        </div>
+      </div>
+    </section>
+  );
 }
 
-function GiftSuitePage({ active, postWithToken }: { active: GiftSectionKey; postWithToken: (endpoint: string, body: unknown) => Promise<ApiPostResponse> }) {
+function GiftSuitePage({ active, canUploadItemTable, postWithToken }: { active: GiftSectionKey; canUploadItemTable: boolean; postWithToken: (endpoint: string, body: unknown) => Promise<ApiPostResponse> }) {
   const [rows, setRows] = React.useState<Record<string, unknown>[]>([]);
   const [view, setView] = React.useState<"list" | "edit">("list");
   const [items, setItems] = React.useState<ItemOption[]>([]);
@@ -2001,7 +2295,7 @@ function GiftSuitePage({ active, postWithToken }: { active: GiftSectionKey; post
   }
 
   if (view === "edit") {
-    return <GiftEditor items={items} onBack={() => setView("list")} onSubmit={async (body) => {
+    return <GiftEditor canUploadItemTable={canUploadItemTable} items={items} onBack={() => setView("list")} onSubmit={async (body) => {
       const result = await postWithToken("/gmGiftAdd", body);
       setStatus(result.ok ? "礼包码已保存" : `保存失败：HTTP ${result.status}`);
       setView("list");
@@ -2052,7 +2346,7 @@ function GiftSuitePage({ active, postWithToken }: { active: GiftSectionKey; post
   );
 }
 
-function GiftEditor({ items, onBack, onSubmit }: { items: ItemOption[]; onBack: () => void; onSubmit: (body: unknown) => Promise<void> }) {
+function GiftEditor({ canUploadItemTable, items, onBack, onSubmit }: { canUploadItemTable: boolean; items: ItemOption[]; onBack: () => void; onSubmit: (body: unknown) => Promise<void> }) {
   const now = new Date();
   const later = new Date(now.getTime() + 7 * 24 * 60 * 60 * 1000);
   const [code, setCode] = React.useState("");
@@ -2085,7 +2379,7 @@ function GiftEditor({ items, onBack, onSubmit }: { items: ItemOption[]; onBack: 
         <label className="gift-form-row"><span>邮件模板</span><input value={templateName} onChange={(event) => setTemplateName(event.target.value)} placeholder="请选择或填写模板名称" /></label>
         <label className="gift-form-row"><span>总兑换数</span><input value={maxCount} onChange={(event) => setMaxCount(event.target.value)} /></label>
         <label className="gift-form-row gift-check-row"><span>是否启用</span><input checked={enabled} onChange={(event) => setEnabled(event.target.checked)} type="checkbox" /></label>
-        <RewardRows items={items} onUploadItemTable={async () => undefined} rewards={rewards} setRewards={setRewards} />
+        <RewardRows canUploadItemTable={canUploadItemTable} items={items} onUploadItemTable={async () => undefined} rewards={rewards} setRewards={setRewards} />
         <label className="gift-form-row"><span>生效时间</span><input type="datetime-local" value={startTime} onChange={(event) => setStartTime(event.target.value)} /><em>北京时间 {formatBeijingTime(startTime)}</em></label>
         <label className="gift-form-row"><span>过期时间</span><input type="datetime-local" value={endTime} onChange={(event) => setEndTime(event.target.value)} /><em>北京时间 {formatBeijingTime(endTime)}</em></label>
         <div className="gift-form-actions"><button onClick={() => void submit()} type="button">保存</button><button onClick={onBack} type="button">取消</button></div>
@@ -2110,7 +2404,7 @@ function RewardTemplateList({ onCreate, onDelete, onEdit, templates }: { onCreat
   return <section className="mail-page"><section className="mail-table-card"><button className="mail-primary-button" onClick={onCreate} type="button">新建</button><MailDataTable columns={["title", "创建时间", "更新时间", "操作"]} rows={templates.map((template) => ({ title: template.title, 创建时间: formatTimestampValue(template.createdAt), 更新时间: formatTimestampValue(template.updatedAt), 操作: <div className="mail-action-buttons"><button onClick={() => onEdit(template)} type="button">编辑</button><button onClick={() => void onDelete(template)} type="button">删除</button></div> }))} /></section></section>;
 }
 
-function RewardTemplateEditor({ items, onBack, onSaved, onUploadItemTable, template }: { items: ItemOption[]; onBack: () => void; onSaved: () => void; onUploadItemTable: (file: File) => Promise<void>; template?: RewardTemplate }) {
+function RewardTemplateEditor({ canUploadItemTable, items, onBack, onSaved, onUploadItemTable, template }: { canUploadItemTable: boolean; items: ItemOption[]; onBack: () => void; onSaved: () => void; onUploadItemTable: (file: File) => Promise<void>; template?: RewardTemplate }) {
   const [title, setTitle] = React.useState(template?.title ?? "");
   const [rewards, setRewards] = React.useState<MailRewardItem[]>(template?.items ?? [{ itemId: "", count: "0" }]);
   const [error, setError] = React.useState("");
@@ -2143,7 +2437,7 @@ function RewardTemplateEditor({ items, onBack, onSaved, onUploadItemTable, templ
       setSaving(false);
     }
   };
-  return <section className="mail-edit-page"><div className="mail-edit-card reward-template-card"><header>奖励模板</header><div className="mail-form"><label className="mail-form-row"><span>标题</span><input value={title} onChange={(event) => setTitle(event.target.value)} /></label><RewardRows items={items} onUploadItemTable={onUploadItemTable} rewards={rewards} setRewards={setRewards} />{error && <div className="mail-form-error">{error}</div>}<div className="mail-form-actions"><button disabled={saving} onClick={() => void save()} type="button">{saving ? "保存中..." : "保存"}</button><button disabled={saving} onClick={onBack} type="button">取消</button></div></div></div></section>;
+  return <section className="mail-edit-page"><div className="mail-edit-card reward-template-card"><header>奖励模板</header><div className="mail-form"><label className="mail-form-row"><span>标题</span><input value={title} onChange={(event) => setTitle(event.target.value)} /></label><RewardRows canUploadItemTable={canUploadItemTable} items={items} onUploadItemTable={onUploadItemTable} rewards={rewards} setRewards={setRewards} />{error && <div className="mail-form-error">{error}</div>}<div className="mail-form-actions"><button disabled={saving} onClick={() => void save()} type="button">{saving ? "保存中..." : "保存"}</button><button disabled={saving} onClick={onBack} type="button">取消</button></div></div></div></section>;
 }
 
 function toDatetimeLocal(date: Date) {
@@ -2164,10 +2458,24 @@ function formatBeijingTime(value: string) {
   return seconds ? formatTimestamp(seconds) : "";
 }
 
+function formatTimeDistance(value: string) {
+  const seconds = parseDatetimeLocalSeconds(value);
+  if (!seconds) return "时间无效";
+  const diff = seconds * 1000 - Date.now();
+  if (diff <= 0) return "已过期";
+  const days = Math.floor(diff / 86400000);
+  const hours = Math.floor((diff % 86400000) / 3600000);
+  const minutes = Math.floor((diff % 3600000) / 60000);
+  if (days > 0) return `距离过期 ${days}天${hours}小时`;
+  if (hours > 0) return `距离过期 ${hours}小时${minutes}分钟`;
+  return `距离过期 ${Math.max(1, minutes)}分钟`;
+}
+
 function formatTimestampValue(value: unknown) {
   if (typeof value === "string" && /^\d{4}-\d{2}-\d{2}/.test(value)) {
     const normalized = value.includes("T") ? value : value.replace(" ", "T");
-    const parsed = new Date(normalized);
+    const timestampText = /(?:Z|[+-]\d{2}:?\d{2})$/.test(normalized) ? normalized : `${normalized}Z`;
+    const parsed = new Date(timestampText);
     if (Number.isFinite(parsed.getTime())) return formatTimestamp(Math.floor(parsed.getTime() / 1000));
     return value.replace("T", " ").slice(0, 16);
   }
