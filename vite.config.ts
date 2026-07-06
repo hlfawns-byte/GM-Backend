@@ -571,6 +571,29 @@ function localAccountPlugin() {
           return;
         }
 
+        if (url === "/local-api/games/reorder" && req.method === "POST") {
+          const body = await readJsonBody(req);
+          const ids = Array.isArray(body.ids) ? body.ids.map((id) => Number(id)).filter(Number.isFinite) : [];
+          const uniqueIds = Array.from(new Set(ids));
+          if (uniqueIds.length === 0) {
+            sendJson(res, 400, { error: "游戏排序不能为空" });
+            return;
+          }
+          const games = readGames();
+          const orderedMap = new Map(games.map((game) => [Number(game.id), game]));
+          const orderedGames = uniqueIds.map((id) => orderedMap.get(id)).filter((game): game is GameConfigRecord => Boolean(game));
+          if (orderedGames.length !== uniqueIds.length) {
+            sendJson(res, 400, { error: "游戏排序包含不存在的区服" });
+            return;
+          }
+          const movedIds = new Set(uniqueIds);
+          const orderedQueue = [...orderedGames];
+          const nextGames = games.map((game) => (movedIds.has(Number(game.id)) ? orderedQueue.shift() ?? game : game));
+          writeGames(nextGames);
+          sendJson(res, 200, { games: nextGames });
+          return;
+        }
+
         const deleteGameMatch = url.match(/^\/local-api\/games\/(\d+)$/);
         const updateGameMatch = url.match(/^\/local-api\/games\/(\d+)$/);
         if (updateGameMatch && req.method === "PUT") {
@@ -663,6 +686,33 @@ function localAccountPlugin() {
         }
 
         const deleteMatch = url.match(/^\/local-api\/accounts\/(\d+)$/);
+        if (deleteMatch && req.method === "PUT") {
+          const id = Number(deleteMatch[1]);
+          const body = await readJsonBody(req);
+          const accounts = readAccounts();
+          const index = accounts.findIndex((account) => account.id === id);
+          if (index < 0) {
+            sendJson(res, 404, { error: "账号不存在" });
+            return;
+          }
+          const next = {
+            ...accounts[index],
+            displayName: String(body.displayName ?? accounts[index].displayName ?? accounts[index].account),
+            role: String(body.role ?? accounts[index].role ?? "运营"),
+            games: Array.isArray(body.games) ? body.games.map(String) : accounts[index].games,
+            permissions: Array.isArray(body.permissions) ? body.permissions.map(String) : accounts[index].permissions,
+            isManager: Boolean(body.isManager),
+            status: String(body.status ?? accounts[index].status ?? "启用") as ManagedAccountRecord["status"],
+          };
+          const password = String(body.password ?? "").trim();
+          if (password) next.password = password;
+          accounts[index] = next;
+          writeAccounts(accounts);
+          const { password: _password, ...safeAccount } = next;
+          sendJson(res, 200, { account: safeAccount });
+          return;
+        }
+
         if (deleteMatch && req.method === "DELETE") {
           const id = Number(deleteMatch[1]);
           writeAccounts(readAccounts().filter((account) => account.id !== id));

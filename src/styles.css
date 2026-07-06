@@ -2650,6 +2650,10 @@ tbody tr:hover,
   max-width: 1280px;
 }
 
+.game-card-grid.drag-active {
+  user-select: none;
+}
+
 .game-card {
   display: grid;
   grid-template-rows: 178px auto;
@@ -2660,7 +2664,9 @@ tbody tr:hover,
   padding: 0;
   background: #fff;
   color: #30394a;
+  cursor: pointer;
   text-align: left;
+  touch-action: manipulation;
   transition:
     border-color 0.16s ease,
     box-shadow 0.16s ease,
@@ -2677,6 +2683,25 @@ tbody tr:hover,
   cursor: wait;
   opacity: 0.72;
   transform: none;
+}
+
+.game-card.press-ready {
+  border-color: #9bc9f7;
+  box-shadow: 0 12px 30px rgb(47 143 234 / 12%);
+}
+
+.game-card.dragging {
+  border-color: #2f8fea;
+  box-shadow: 0 20px 48px rgb(35 49 73 / 18%);
+  cursor: grabbing;
+  opacity: 0.78;
+  transform: scale(0.985);
+  z-index: 2;
+}
+
+.game-card-grid.drag-active .game-card {
+  cursor: grabbing;
+  touch-action: none;
 }
 
 .game-cover {

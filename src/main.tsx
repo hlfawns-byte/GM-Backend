@@ -720,8 +720,22 @@ function App() {
     return <><LoginScreen games={games} onLogin={setAuth} />{versionModal}</>;
   }
 
+  const reorderGames = async (orderedIds: number[]) => {
+    const response = await fetch("/local-api/games/reorder", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ ids: orderedIds }),
+    });
+    if (!response.ok) {
+      const payload = (await response.json().catch(() => ({}))) as { error?: string };
+      throw new Error(payload.error || "保存游戏排序失败");
+    }
+    await refreshGames();
+    void writeUserLog({ action: "调整游戏排序", target: `${orderedIds.length} 个游戏区服` });
+  };
+
   if (!session) {
-    return <><GameSelectScreen auth={auth} games={games} onEnter={setSession} onLogout={logout} />{versionModal}</>;
+    return <><GameSelectScreen auth={auth} games={games} onEnter={setSession} onLogout={logout} onReorder={reorderGames} />{versionModal}</>;
   }
 
   const moduleConfig = modules[active];
@@ -780,6 +794,16 @@ function App() {
     }
     await refreshAccounts();
     void writeUserLog({ action: "创建账号", target: account.account, detail: `${account.role} / ${(account.games ?? []).join(",")}` });
+  };
+
+  const updateAccount = async (account: ManagedAccount) => {
+    const response = await fetch(`/local-api/accounts/${account.id}`, { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify(account) });
+    if (!response.ok) {
+      const payload = (await response.json().catch(() => ({}))) as { error?: string };
+      throw new Error(payload.error || "保存账号失败");
+    }
+    await refreshAccounts();
+    void writeUserLog({ action: "修改账号", target: account.account, detail: `${account.role} / ${(account.games ?? []).join(",")}` });
   };
 
   const deleteAccount = async (accountId: number) => {
@@ -906,7 +930,7 @@ function App() {
           )}
         </div>
       </section>
-      {auth.isAdmin && accountPanelOpen && <AccountPanel accounts={accounts} games={games} canManageAdmins={auth.isRootAdmin} session={session} onAdd={createAccount} onDelete={deleteAccount} onClose={() => setAccountPanelOpen(false)} />}
+      {auth.isAdmin && accountPanelOpen && <AccountPanel accounts={accounts} games={games} canManageAdmins={auth.isRootAdmin} session={session} onAdd={createAccount} onDelete={deleteAccount} onUpdate={updateAccount} onClose={() => setAccountPanelOpen(false)} />}
       {auth.isAdmin && gamePanelOpen && <GamePanel games={games} onAdd={createGame} onDelete={deleteGame} onUpdate={updateGame} onClose={() => setGamePanelOpen(false)} />}
       {auth.isAdmin && logPanelOpen && <UserLogPanel onClose={() => setLogPanelOpen(false)} />}
       {profilePanelOpen && auth && <ProfilePanel auth={auth} onClose={() => setProfilePanelOpen(false)} onSave={updateProfile} />}
@@ -1117,12 +1141,108 @@ function LoginScreen({ games, onLogin }: { games: GameConfig[]; onLogin: (sessio
   );
 }
 
-function GameSelectScreen({ auth, games, onEnter, onLogout }: { auth: AuthSession; games: GameConfig[]; onEnter: (session: Session) => void; onLogout: () => void }) {
+function GameSelectScreen({ auth, games, onEnter, onLogout, onReorder }: { auth: AuthSession; games: GameConfig[]; onEnter: (session: Session) => void; onLogout: () => void; onReorder: (orderedIds: number[]) => Promise<void> }) {
   const [error, setError] = React.useState("");
   const [entering, setEntering] = React.useState("");
-  const allowedGames = games.filter((game) => auth.isAdmin || auth.games.includes(`${game.name}/${game.serverName}`));
+  const [orderedGames, setOrderedGames] = React.useState<GameConfig[]>([]);
+  const [draggingId, setDraggingId] = React.useState<number | null>(null);
+  const [pressingId, setPressingId] = React.useState<number | null>(null);
+  const allowedGames = React.useMemo(() => games.filter((game) => auth.isAdmin || auth.games.includes(`${game.name}/${game.serverName}`)), [auth.games, auth.isAdmin, games]);
+  const allowedSignature = React.useMemo(() => allowedGames.map((game) => game.id ?? `${game.name}/${game.serverName}`).join("|"), [allowedGames]);
+  const pressTimerRef = React.useRef<number | null>(null);
+  const draggedIdRef = React.useRef<number | null>(null);
+  const dragMovedRef = React.useRef(false);
+  const suppressClickRef = React.useRef(false);
+  const latestOrderRef = React.useRef<GameConfig[]>(allowedGames);
+
+  React.useEffect(() => {
+    setOrderedGames(allowedGames);
+    latestOrderRef.current = allowedGames;
+  }, [allowedSignature, allowedGames]);
+
+  const clearPressTimer = () => {
+    if (pressTimerRef.current !== null) {
+      window.clearTimeout(pressTimerRef.current);
+      pressTimerRef.current = null;
+    }
+  };
+
+  const beginPress = (event: React.PointerEvent<HTMLButtonElement>, game: GameConfig) => {
+    if (!game.id || entering) return;
+    const button = event.currentTarget;
+    const pointerId = event.pointerId;
+    clearPressTimer();
+    setPressingId(game.id);
+    pressTimerRef.current = window.setTimeout(() => {
+      draggedIdRef.current = game.id ?? null;
+      dragMovedRef.current = false;
+      suppressClickRef.current = true;
+      setDraggingId(game.id ?? null);
+      setPressingId(null);
+      button.setPointerCapture(pointerId);
+    }, 420);
+  };
+
+  const moveDraggedGame = (targetId: number) => {
+    const sourceId = draggedIdRef.current;
+    if (!sourceId || sourceId === targetId) return;
+    setOrderedGames((current) => {
+      const fromIndex = current.findIndex((game) => game.id === sourceId);
+      const toIndex = current.findIndex((game) => game.id === targetId);
+      if (fromIndex < 0 || toIndex < 0 || fromIndex === toIndex) return current;
+      const next = [...current];
+      const [moved] = next.splice(fromIndex, 1);
+      next.splice(toIndex, 0, moved);
+      latestOrderRef.current = next;
+      dragMovedRef.current = true;
+      return next;
+    });
+  };
+
+  const continueDrag = (event: React.PointerEvent<HTMLButtonElement>) => {
+    if (!draggedIdRef.current) return;
+    event.preventDefault();
+    const target = document.elementFromPoint(event.clientX, event.clientY)?.closest("[data-game-id]");
+    const targetId = Number(target?.getAttribute("data-game-id"));
+    if (Number.isFinite(targetId)) moveDraggedGame(targetId);
+  };
+
+  const finishDrag = async (event?: React.PointerEvent<HTMLButtonElement>) => {
+    clearPressTimer();
+    setPressingId(null);
+    const draggedId = draggedIdRef.current;
+    draggedIdRef.current = null;
+    setDraggingId(null);
+    try {
+      if (event?.currentTarget.hasPointerCapture(event.pointerId)) {
+        event.currentTarget.releasePointerCapture(event.pointerId);
+      }
+    } catch {
+      // Some browsers throw if capture was already released.
+    }
+    if (!draggedId || !dragMovedRef.current) {
+      window.setTimeout(() => {
+        suppressClickRef.current = false;
+      }, 0);
+      return;
+    }
+    const orderedIds = latestOrderRef.current.map((game) => game.id).filter((id): id is number => typeof id === "number");
+    try {
+      await onReorder(orderedIds);
+    } catch (error) {
+      setOrderedGames(allowedGames);
+      latestOrderRef.current = allowedGames;
+      setError(error instanceof Error ? error.message : "保存游戏排序失败");
+    } finally {
+      dragMovedRef.current = false;
+      window.setTimeout(() => {
+        suppressClickRef.current = false;
+      }, 0);
+    }
+  };
 
   const enterGame = async (game: GameConfig) => {
+    if (suppressClickRef.current) return;
     setEntering(`${game.name}/${game.serverName}`);
     setError("");
     try {
@@ -1177,11 +1297,25 @@ function GameSelectScreen({ auth, games, onEnter, onLogout }: { auth: AuthSessio
           {allowedGames.length === 0 ? (
             <section className="empty-game-list"><ShieldBan size={30} /><strong>暂无可访问游戏</strong><span>请联系管理员为该账号分配游戏区服权限。</span></section>
           ) : (
-            <section className="game-card-grid">
-              {allowedGames.map((game) => {
+            <section className={`game-card-grid${draggingId ? " drag-active" : ""}`}>
+              {orderedGames.map((game) => {
                 const key = `${game.name}/${game.serverName}`;
+                const isDragging = draggingId === game.id;
+                const isPressing = pressingId === game.id;
                 return (
-                  <button className="game-card" disabled={entering === key} key={key} onClick={() => void enterGame(game)} type="button">
+                  <button
+                    className={`game-card${isDragging ? " dragging" : ""}${isPressing ? " press-ready" : ""}`}
+                    data-game-id={game.id}
+                    disabled={entering === key}
+                    key={game.id ?? key}
+                    onClick={() => void enterGame(game)}
+                    onPointerCancel={(event) => void finishDrag(event)}
+                    onPointerDown={(event) => beginPress(event, game)}
+                    onPointerLeave={clearPressTimer}
+                    onPointerMove={continueDrag}
+                    onPointerUp={(event) => void finishDrag(event)}
+                    type="button"
+                  >
                     <div className="game-cover" style={game.backgroundUrl ? { backgroundImage: `url(${game.backgroundUrl})` } : undefined}>
                       {!game.backgroundUrl && <span>{game.name}</span>}
                     </div>
@@ -2301,6 +2435,16 @@ function GiftSuitePage({ active, canUploadItemTable, postWithToken }: { active: 
     setView("list");
   }, [active, refreshGiftList]);
 
+  const uploadItemTable = async (file: File) => {
+    const formData = new FormData();
+    formData.append("file", file);
+    const response = await fetch("/local-api/items/upload", { method: "POST", body: formData });
+    const payload = (await response.json().catch(() => ({}))) as { items?: ItemOption[]; error?: string };
+    if (!response.ok) throw new Error(payload.error || "上传道具表失败");
+    setItems(payload.items ?? []);
+    setStatus(`道具表已导入，共 ${payload.items?.length ?? 0} 个道具`);
+  };
+
   if (active === "giftRecall") {
     return <GiftRecallPage />;
   }
@@ -2315,7 +2459,7 @@ function GiftSuitePage({ active, canUploadItemTable, postWithToken }: { active: 
       setStatus(result.ok ? "礼包码已保存" : `保存失败：HTTP ${result.status}`);
       setView("list");
       await refreshGiftList();
-    }} />;
+    }} onUploadItemTable={uploadItemTable} />;
   }
 
   const filteredRows = rows.filter((row) => {
@@ -2361,7 +2505,7 @@ function GiftSuitePage({ active, canUploadItemTable, postWithToken }: { active: 
   );
 }
 
-function GiftEditor({ canUploadItemTable, items, onBack, onSubmit }: { canUploadItemTable: boolean; items: ItemOption[]; onBack: () => void; onSubmit: (body: unknown) => Promise<void> }) {
+function GiftEditor({ canUploadItemTable, items, onBack, onSubmit, onUploadItemTable }: { canUploadItemTable: boolean; items: ItemOption[]; onBack: () => void; onSubmit: (body: unknown) => Promise<void>; onUploadItemTable: (file: File) => Promise<void> }) {
   const now = new Date();
   const later = new Date(now.getTime() + 7 * 24 * 60 * 60 * 1000);
   const [code, setCode] = React.useState("");
@@ -2394,7 +2538,7 @@ function GiftEditor({ canUploadItemTable, items, onBack, onSubmit }: { canUpload
         <label className="gift-form-row"><span>邮件模板</span><input value={templateName} onChange={(event) => setTemplateName(event.target.value)} placeholder="请选择或填写模板名称" /></label>
         <label className="gift-form-row"><span>总兑换数</span><input value={maxCount} onChange={(event) => setMaxCount(event.target.value)} /></label>
         <label className="gift-form-row gift-check-row"><span>是否启用</span><input checked={enabled} onChange={(event) => setEnabled(event.target.checked)} type="checkbox" /></label>
-        <RewardRows canUploadItemTable={canUploadItemTable} items={items} onUploadItemTable={async () => undefined} rewards={rewards} setRewards={setRewards} />
+        <RewardRows canUploadItemTable={canUploadItemTable} items={items} onUploadItemTable={onUploadItemTable} rewards={rewards} setRewards={setRewards} />
         <label className="gift-form-row"><span>生效时间</span><input type="datetime-local" value={startTime} onChange={(event) => setStartTime(event.target.value)} /><em>北京时间 {formatBeijingTime(startTime)}</em></label>
         <label className="gift-form-row"><span>过期时间</span><input type="datetime-local" value={endTime} onChange={(event) => setEndTime(event.target.value)} /><em>北京时间 {formatBeijingTime(endTime)}</em></label>
         <div className="gift-form-actions"><button onClick={() => void submit()} type="button">保存</button><button onClick={onBack} type="button">取消</button></div>
@@ -2671,11 +2815,31 @@ function configsToNoticePayload(configs: NoticeConfig[]) {
   return payload;
 }
 
-function AccountPanel({ accounts, canManageAdmins, games, session, onAdd, onDelete, onClose }: { accounts: ManagedAccount[]; canManageAdmins: boolean; games: GameConfig[]; session: Session; onAdd: (account: ManagedAccount) => Promise<void>; onDelete: (accountId: number) => Promise<void>; onClose: () => void }) {
+function AccountPanel({ accounts, canManageAdmins, games, session, onAdd, onDelete, onUpdate, onClose }: { accounts: ManagedAccount[]; canManageAdmins: boolean; games: GameConfig[]; session: Session; onAdd: (account: ManagedAccount) => Promise<void>; onDelete: (accountId: number) => Promise<void>; onUpdate: (account: ManagedAccount) => Promise<void>; onClose: () => void }) {
   const currentGameKey = `${session.game}/${session.serverName}`;
-  const [form, setForm] = React.useState({ account: "", password: "", displayName: "", role: "运营", gameKeys: [currentGameKey], permissions: ["用户查询", "日志审计"], isManager: false });
+  const emptyForm = { account: "", password: "", displayName: "", role: "运营", gameKeys: [currentGameKey], permissions: ["用户查询", "日志审计"], isManager: false };
+  const [form, setForm] = React.useState(emptyForm);
+  const [editingAccount, setEditingAccount] = React.useState<ManagedAccount | null>(null);
   const [formError, setFormError] = React.useState("");
   const gameOptions = React.useMemo(() => games.map((game) => ({ label: `${game.name} / ${game.serverName}`, value: `${game.name}/${game.serverName}` })), [games]);
+  const beginEdit = (account: ManagedAccount) => {
+    setEditingAccount(account);
+    setForm({
+      account: account.account,
+      password: "",
+      displayName: account.displayName,
+      role: account.role,
+      gameKeys: account.isManager ? gameOptions.map((game) => game.value) : account.games,
+      permissions: account.permissions,
+      isManager: Boolean(account.isManager),
+    });
+    setFormError("");
+  };
+  const resetForm = () => {
+    setEditingAccount(null);
+    setForm(emptyForm);
+    setFormError("");
+  };
 
   React.useEffect(() => {
     const available = new Set(gameOptions.map((game) => game.value));
@@ -2694,27 +2858,36 @@ function AccountPanel({ accounts, canManageAdmins, games, session, onAdd, onDele
             event.preventDefault();
             try {
               setFormError("");
-              await onAdd({ id: Date.now(), account: form.account, password: form.password, displayName: form.displayName || form.account, role: form.role, games: form.isManager ? gameOptions.map((game) => game.value) : form.gameKeys, permissions: form.permissions, isManager: canManageAdmins && form.isManager, status: "启用" });
-              setForm((current) => ({ ...current, account: "", password: "", displayName: "", gameKeys: [currentGameKey], isManager: false }));
+              const payload = { id: editingAccount?.id ?? Date.now(), account: form.account, password: form.password, displayName: form.displayName || form.account, role: form.role, games: form.isManager ? gameOptions.map((game) => game.value) : form.gameKeys, permissions: form.permissions, isManager: canManageAdmins && form.isManager, status: editingAccount?.status ?? "启用" };
+              if (editingAccount) {
+                await onUpdate(payload);
+                resetForm();
+              } else {
+                await onAdd(payload);
+                setForm((current) => ({ ...current, account: "", password: "", displayName: "", gameKeys: [currentGameKey], isManager: false }));
+              }
             } catch (error) {
-              setFormError(error instanceof Error ? error.message : "创建账号失败");
+              setFormError(error instanceof Error ? error.message : editingAccount ? "保存账号失败" : "创建账号失败");
             }
           }}>
-            <label>登录账号<input value={form.account} onChange={(event) => setForm({ ...form, account: event.target.value })} placeholder="成员账号" /></label>
-            <label>登录密码<input type="password" value={form.password} onChange={(event) => setForm({ ...form, password: event.target.value })} placeholder="成员密码" /></label>
+            <label>登录账号<input disabled={Boolean(editingAccount)} value={form.account} onChange={(event) => setForm({ ...form, account: event.target.value })} placeholder="成员账号" /></label>
+            <label>登录密码<input type="password" value={form.password} onChange={(event) => setForm({ ...form, password: event.target.value })} placeholder={editingAccount ? "不修改密码可留空" : "成员密码"} /></label>
             <label>显示名称<input value={form.displayName} onChange={(event) => setForm({ ...form, displayName: event.target.value })} placeholder="成员姓名" /></label>
             <label>角色<select value={form.role} onChange={(event) => setForm({ ...form, role: event.target.value })}><option>策划</option><option>程序</option><option>测试</option><option>运营</option></select></label>
             <label>游戏权限<MultiSelectDropdown options={gameOptions} values={form.gameKeys} onChange={(gameKeys) => setForm({ ...form, gameKeys })} placeholder="请选择游戏区服" /></label>
             {canManageAdmins && <label className="permission-check admin-toggle"><input checked={form.isManager} onChange={(event) => setForm({ ...form, isManager: event.target.checked })} type="checkbox" />设为后台管理员</label>}
             <label>功能权限<MultiSelectDropdown options={permissionOptions.map((item) => ({ label: item, value: item }))} values={form.permissions} onChange={(permissions) => setForm({ ...form, permissions })} placeholder="请选择功能权限" /></label>
-            <button className="primary-button" type="submit"><Plus size={15} />创建账号</button>
+            <div className="form-button-row">
+              <button className="primary-button" type="submit"><Plus size={15} />{editingAccount ? "保存修改" : "创建账号"}</button>
+              {editingAccount && <button onClick={resetForm} type="button">取消编辑</button>}
+            </div>
             {formError && <div className="form-error">{formError}</div>}
           </form>
           <div className="managed-list">{accounts.length === 0 ? <div className="empty-table"><strong>暂无子账号</strong><span>请在左侧创建账号给其他人使用。</span></div> : accounts.map((account) => (
             <article className="managed-account" key={account.id}>
               <div><strong>{account.displayName}</strong><span>{account.account} / {account.role}{account.isManager ? " / 后台管理员" : ""}</span></div>
               <div className="tag-row">{account.isManager ? <small>全部游戏</small> : account.games.map((item) => <small key={item}>{item}</small>)}{account.permissions.slice(0, 3).map((item) => <small key={item}>{item}</small>)}</div>
-              <div className="managed-actions">{canManageAdmins ? <button onClick={() => void onDelete(account.id)} type="button"><Trash2 size={14} />删除</button> : <button disabled type="button"><Trash2 size={14} />仅admin可删</button>}</div>
+              <div className="managed-actions"><button onClick={() => beginEdit(account)} type="button"><UserCog size={14} />编辑</button>{canManageAdmins ? <button onClick={() => void onDelete(account.id)} type="button"><Trash2 size={14} />删除</button> : <button disabled type="button"><Trash2 size={14} />仅admin可删</button>}</div>
             </article>
           ))}</div>
         </div>
