@@ -445,9 +445,21 @@ function toVersionNumberArray(value?: string) {
   return String(value ?? "")
     .split(/[\s,，;；]+/)
     .map((item) => item.trim())
-    .filter((item) => item.includes("."))
-    .map(parseFlexibleNumber)
-    .filter((item) => Number.isFinite(item));
+    .filter(Boolean)
+    .flatMap((item) => {
+      if (!/^\d+\.\d+\.\d+$/.test(item)) return [];
+      const [major, minor, patch] = item.split(".").map((part) => Number(part));
+      if (![major, minor, patch].every((part) => Number.isInteger(part) && part >= 0 && part <= 99)) return [];
+      const versionCode = major * 10000 + minor * 100 + patch;
+      return [versionCode, versionCode * 100 + 1];
+    });
+}
+
+function toPlatformNumberArray(value?: string) {
+  return String(value ?? "")
+    .split(/[\s,，;；]+/)
+    .map((item) => Number(item.trim()))
+    .filter((item) => item === 1 || item === 2);
 }
 
 function dateToDatetimeLocal(value: string, endOfDay = false) {
@@ -545,6 +557,11 @@ function getApiData(payload: unknown) {
 }
 
 function humanizeApiError(message: string) {
+  if (/id\[\d+\].*服务器不存在/.test(message) || /服务器不存在/.test(message)) return "区服未填写，或填写的区服不存在";
+  if (/TargetID|UserId|用户.*不存在|玩家.*不存在/i.test(message)) return "用户ID未填写，或用户不存在";
+  if (/Platform|平台/i.test(message)) return "系统条件未填写，或选择的系统不支持";
+  if (/Version|版本/i.test(message)) return "版本条件未填写，或版本格式不正确";
+  if (/参数错误/.test(message)) return "条件参数填写不完整，请检查区服、系统、版本和时间";
   if (/Et.*当前时间.*10分钟/.test(message)) return "过期时间至少要比现在晚 10 分钟";
   if (/St.*大于.*0/.test(message)) return "当前接口暂不支持定时生效，请先用立即生效";
   if (/is not exist this key/i.test(message)) return "正式服没有查到这个 UID 对应的账号，请确认 UID 是否属于当前区服/正式服";
@@ -914,7 +931,7 @@ function App() {
             </section>
           )}
 
-          {active === "dashboard" ? <Dashboard results={results} accounts={accounts} /> : active === "playerInfo" ? <PlayerInfoPage postWithToken={postWithToken} /> : active === "bindUid" ? <BindUidPage postWithToken={postWithToken} /> : active === "gmState" ? <BanControlPage postWithToken={postWithToken} /> : active === "silence" ? <SilencePage operator={session.operatorAccount} /> : active.startsWith("mail") ? <MailSuitePage active={active as MailSectionKey} canUploadItemTable={auth.isAdmin} postWithToken={postWithToken} setActive={setActive} /> : active.startsWith("gift") ? <GiftSuitePage active={active as GiftSectionKey} canUploadItemTable={auth.isAdmin} postWithToken={postWithToken} /> : active === "notice" ? <NoticePage postWithToken={postWithToken} /> : active === "serverTime" ? <OpenServerPage postWithToken={postWithToken} /> : moduleConfig.status === "pending" ? <UnavailablePanel module={moduleConfig} /> : (
+          {active === "dashboard" ? <Dashboard results={results} accounts={accounts} /> : active === "playerInfo" ? <PlayerInfoPage postWithToken={postWithToken} /> : active === "bindUid" ? <BindUidPage postWithToken={postWithToken} /> : active === "gmState" ? <BanControlPage postWithToken={postWithToken} /> : active === "silence" ? <SilencePage operator={session.operatorAccount} /> : active.startsWith("mail") ? <MailSuitePage active={active as MailSectionKey} canUploadItemTable={auth.isAdmin} postWithToken={postWithToken} session={session} setActive={setActive} /> : active.startsWith("gift") ? <GiftSuitePage active={active as GiftSectionKey} canUploadItemTable={auth.isAdmin} postWithToken={postWithToken} /> : active === "notice" ? <NoticePage postWithToken={postWithToken} /> : active === "serverTime" ? <OpenServerPage postWithToken={postWithToken} /> : moduleConfig.status === "pending" ? <UnavailablePanel module={moduleConfig} /> : (
             <>
               <section className="filter-panel">
                 <div className="panel-heading">
@@ -1765,7 +1782,7 @@ function OpenServerCard({ children, color, desc, title }: { children: React.Reac
   return <section className={`open-server-card ${color}`}><span>admin</span><h3>{title}</h3><p>{desc}</p><div>{children}</div></section>;
 }
 
-function MailSuitePage({ active, canUploadItemTable, postWithToken, setActive }: { active: MailSectionKey; canUploadItemTable: boolean; postWithToken: (endpoint: string, body: unknown) => Promise<ApiPostResponse>; setActive: (section: SectionKey) => void }) {
+function MailSuitePage({ active, canUploadItemTable, postWithToken, session, setActive }: { active: MailSectionKey; canUploadItemTable: boolean; postWithToken: (endpoint: string, body: unknown) => Promise<ApiPostResponse>; session: Session; setActive: (section: SectionKey) => void }) {
   const [items, setItems] = React.useState<ItemOption[]>([]);
   const [serverOptions, setServerOptions] = React.useState<ServerOption[]>([]);
   const [templates, setTemplates] = React.useState<MailTemplate[]>([]);
@@ -1782,21 +1799,24 @@ function MailSuitePage({ active, canUploadItemTable, postWithToken, setActive }:
   const [status, setStatus] = React.useState("");
 
   const refreshLocalMailData = React.useCallback(async () => {
-    const [itemResponse, templateResponse, rewardResponse, serverResponse] = await Promise.all([
+    const [itemResponse, templateResponse, rewardResponse, serverResponse, scheduledResponse] = await Promise.all([
       fetch("/local-api/items"),
       fetch("/local-api/mail-templates"),
       fetch("/local-api/reward-templates"),
       fetch("/local-api/game-servers"),
+      fetch(`/local-api/scheduled-mails?serverUrl=${encodeURIComponent(session.serverUrl)}`),
     ]);
     const itemPayload = (await itemResponse.json().catch(() => ({}))) as { items?: ItemOption[] };
     const templatePayload = (await templateResponse.json().catch(() => ({}))) as { templates?: MailTemplate[] };
     const rewardPayload = (await rewardResponse.json().catch(() => ({}))) as { templates?: RewardTemplate[] };
     const serverPayload = (await serverResponse.json().catch(() => ({}))) as { servers?: ServerOption[] };
+    const scheduledPayload = (await scheduledResponse.json().catch(() => ({}))) as { mails?: Record<string, unknown>[] };
     setItems(itemPayload.items ?? []);
     setTemplates(templatePayload.templates ?? []);
     setRewardTemplates(rewardPayload.templates ?? []);
     setServerOptions(serverPayload.servers ?? []);
-  }, []);
+    setLocalMailRows(scheduledPayload.mails ?? []);
+  }, [session.serverUrl]);
 
   const refreshMailList = React.useCallback(async () => {
     const result = await postWithToken("/gmMailLst", {});
@@ -1871,13 +1891,38 @@ function MailSuitePage({ active, canUploadItemTable, postWithToken, setActive }:
         initialMail={editingMailRow}
         onBack={() => setView("list")}
         onSubmit={async (body) => {
+          const submitted = getObject(body) ?? {};
+          const startSeconds = Number(submitted.St);
+          const isScheduled = Number.isFinite(startSeconds) && startSeconds > Math.floor(Date.now() / 1000) + 5;
+          if (isScheduled) {
+            const response = await fetch("/local-api/scheduled-mails", {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({
+                serverUrl: session.serverUrl,
+                game: session.game,
+                serverName: session.serverName,
+                operator: session.operatorAccount,
+                scheduleAt: startSeconds,
+                body,
+              }),
+            });
+            const payload = (await response.json().catch(() => ({}))) as { mail?: Record<string, unknown>; error?: string };
+            if (!response.ok || !payload.mail) throw new Error(payload.error || "创建定时邮件失败");
+            const localRow = payload.mail;
+            const message = `邮件已加入定时队列，将在 ${formatTimestamp(startSeconds)} 发送`;
+            setStatus(message);
+            setView("list");
+            setEditingMailRow(undefined);
+            setLocalMailRows((current) => [localRow, ...current.filter((row) => String(row.Id) !== String(localRow.Id))].slice(0, 50));
+            return message;
+          }
           const result = await postWithToken("/gmMailAdd", body);
           const error = apiBusinessError(result);
           if (error) {
             throw new Error(`邮件提交失败：${error}`);
           }
           const data = getApiData(result.payload);
-          const submitted = getObject(body) ?? {};
           const localRow = {
             ...submitted,
             ...(data ?? {}),
@@ -1922,6 +1967,18 @@ function MailSuitePage({ active, canUploadItemTable, postWithToken, setActive }:
       onCreate={() => { setEditingMailRow(undefined); setView("edit"); }}
       onEdit={(row) => { setEditingMailRow(row); setView("edit"); }}
       onDelete={async (id) => {
+        const localRow = localMailRows.find((row) => String(row.Id) === id);
+        if (localRow?.__scheduled) {
+          const response = await fetch(`/local-api/scheduled-mails/${encodeURIComponent(id)}`, { method: "DELETE" });
+          const payload = (await response.json().catch(() => ({}))) as { error?: string };
+          if (!response.ok) {
+            setStatus(`撤回失败：${payload.error || "定时邮件删除失败"}`);
+            return;
+          }
+          setLocalMailRows((current) => current.filter((row) => String(row.Id) !== id));
+          setStatus("定时邮件已撤回");
+          return;
+        }
         const result = await postWithToken("/gmMailDel", { Id: id });
         const error = apiBusinessError(result);
         setStatus(error ? `删除失败：${error}` : "邮件已删除");
@@ -1976,7 +2033,9 @@ function MailListPage({ active, localMailRows, mailRows, onCreate, onDelete, onE
             const typeName = isServerMail ? "区服" : typ === 3 || (!typ && targetIds.length > 0) ? "个人" : "全局";
             const title = formatCell(row.Titel ?? row.Title ?? "自定义邮件");
             const state = Number(row.St);
-            const statusText = row.__claimed ? "已领取" : state > 0 ? `状态 ${state}` : "未领取";
+            const statusText = row.__scheduled
+              ? row.__scheduledStatus === "failed" ? `定时失败：${formatCell(row.__scheduledError)}` : "待发送"
+              : row.__claimed ? "已领取" : state > 0 ? `状态 ${state}` : "未领取";
             const createdAt = formatCell(row.CreateTime ?? row.CreatedAt ?? row.Ct ?? row.createdAt);
             const regEnd = row.RegtEnd ?? row.Regt;
             return {
@@ -2012,6 +2071,7 @@ function MailEditor({ canUploadItemTable, global, initialMail, items, onBack, on
   const [title, setTitle] = React.useState(String(initialMail?.Titel ?? initialMail?.Title ?? ""));
   const [body, setBody] = React.useState(String(initialMail?.Body ?? ""));
   const [targetIds, setTargetIds] = React.useState(getArray(initialMail?.TargetID).join(","));
+  const [sendMode, setSendMode] = React.useState<"now" | "scheduled">(initialMail?.__scheduled ? "scheduled" : "now");
   const [rewards, setRewards] = React.useState<MailRewardItem[]>(() => {
     const raw = getArray(initialMail?.ItemLst);
     const parsed: MailRewardItem[] = [];
@@ -2081,7 +2141,7 @@ function MailEditor({ canUploadItemTable, global, initialMail, items, onBack, on
     }
     const conditionRows = filterRows.filter((row) => isGlobalMail || row.field !== "server");
     const versionList = conditionRows.filter((row) => row.field === "version").flatMap((row) => toVersionNumberArray(row.value));
-    const platformList = conditionRows.filter((row) => row.field === "system").flatMap((row) => toFlexibleNumberArray(row.value));
+    const platformList = conditionRows.filter((row) => row.field === "system").flatMap((row) => toPlatformNumberArray(row.value));
     const serverTargetIds = isGlobalMail ? filterRows.filter((row) => row.field === "server").flatMap((row) => toFlexibleNumberArray(row.value)) : [];
     const regBeginValues = conditionRows.filter((row) => row.field === "regTime" && row.op === ">=" && row.value).map((row) => parseDatetimeLocalSeconds(dateToDatetimeLocal(row.value)));
     const regEndValues = conditionRows.filter((row) => row.field === "regTime" && row.op === "<=" && row.value).map((row) => parseDatetimeLocalSeconds(dateToDatetimeLocal(row.value, true)));
@@ -2099,20 +2159,46 @@ function MailEditor({ canUploadItemTable, global, initialMail, items, onBack, on
       setError("当前邮件接口只支持系统、版本、游戏内区服的等于条件，范围和排除条件暂不支持保存");
       return;
     }
+    const emptyCondition = conditionRows.find((row) => ["system", "version", "server"].includes(row.field) && !row.value.trim());
+    if (emptyCondition) {
+      const labels: Record<string, string> = { system: "系统", version: "版本", server: "区服" };
+      setError(`${labels[emptyCondition.field] ?? "条件"}未填写`);
+      return;
+    }
     if (conditionRows.some((row) => row.field === "version" && row.value.trim() && !toVersionNumberArray(row.value).length)) {
-      setError("APP版本请填写带小数点的版本号，例如 1.8.4.4");
+      setError("APP版本请填写 x.x.x 格式，例如 1.8.4");
+      return;
+    }
+    if (conditionRows.some((row) => row.field === "system" && row.value.trim() && !toPlatformNumberArray(row.value).length)) {
+      setError("系统请选择 GooglePlay 或 iOS");
       return;
     }
     if (isGlobalMail && filterRows.some((row) => row.field === "server" && row.value.trim()) && !serverTargetIds.length) {
-      setError("请输入有效的游戏内区服ID");
+      setError("区服未填写");
       return;
     }
-    const startSeconds = parseDatetimeLocalSeconds(startTime);
-    if (!startSeconds) {
-      setError("请选择有效的生效时间");
+    if (isGlobalMail && serverTargetIds.length && serverOptions.length) {
+      const serverIds = new Set(serverOptions.map((server) => Number(server.id)));
+      const missingServer = serverTargetIds.find((serverId) => !serverIds.has(Number(serverId)));
+      if (missingServer) {
+        setError(`区服不存在：${missingServer}`);
+        return;
+      }
+    }
+    if (isGlobalMail && filterRows.some((row) => row.field === "server" && !row.value.trim())) {
+      setError("区服未填写");
       return;
     }
-    if (endSeconds <= startSeconds) {
+    const startSeconds = sendMode === "scheduled" ? parseDatetimeLocalSeconds(startTime) : 0;
+    if (sendMode === "scheduled" && !startSeconds) {
+      setError("请选择有效的定时发送时间");
+      return;
+    }
+    if (sendMode === "scheduled" && startSeconds <= Math.floor(Date.now() / 1000) + 5) {
+      setError("定时发送时间必须晚于当前时间");
+      return;
+    }
+    if (sendMode === "scheduled" && endSeconds <= startSeconds) {
       setError("过期时间必须晚于生效时间");
       return;
     }
@@ -2127,7 +2213,7 @@ function MailEditor({ canUploadItemTable, global, initialMail, items, onBack, on
         RegtBegin: regBeginSeconds,
         Regt: regEndSeconds,
         Et: endSeconds,
-        St: 0,
+        St: sendMode === "scheduled" ? startSeconds : 0,
         SenderName: "GM",
         Titel: title,
         Body: body,
@@ -2198,7 +2284,7 @@ function MailEditor({ canUploadItemTable, global, initialMail, items, onBack, on
                         {serverOptions.map((server) => <option key={server.id} value={server.id}>{server.name}</option>)}
                       </select>
                     ) : (
-                      <input disabled={unsupported} value={row.value} onChange={(event) => setFilterRows((current) => current.map((item) => item.id === row.id ? { ...item, value: event.target.value } : item))} placeholder={unsupported ? "当前接口暂未开放" : row.field === "version" ? "例如 1.8.4.4" : row.field === "server" ? "例如 12 或 1,2" : "例如 1,2"} />
+                      <input disabled={unsupported} value={row.value} onChange={(event) => setFilterRows((current) => current.map((item) => item.id === row.id ? { ...item, value: event.target.value } : item))} placeholder={unsupported ? "当前接口暂未开放" : row.field === "version" ? "例如 1.8.4" : row.field === "server" ? "例如 12 或 1,2" : "例如 1,2"} />
                     )}
                     <button className="mail-condition-remove" onClick={() => setFilterRows((current) => current.filter((item) => item.id !== row.id))} type="button">删除</button>
                   </div>
@@ -2213,7 +2299,8 @@ function MailEditor({ canUploadItemTable, global, initialMail, items, onBack, on
           {!isGlobalMail && <label className="mail-form-row mail-textarea-row"><span>用户 ID</span><textarea value={targetIds} onChange={(event) => setTargetIds(event.target.value)} /></label>}
           <label className="mail-form-row"><span>邮件标题</span><input value={title} onChange={(event) => setTitle(event.target.value)} /></label>
           <label className="mail-form-row mail-textarea-row"><span>邮件内容</span><textarea value={body} onChange={(event) => setBody(event.target.value)} /></label>
-          <label className="mail-form-row"><span>生效时间</span><input type="datetime-local" value={startTime} onChange={(event) => setStartTime(event.target.value)} /><em>北京时间 {formatBeijingTime(startTime)}</em></label>
+          <label className="mail-form-row"><span>发送方式</span><select value={sendMode} onChange={(event) => setSendMode(event.target.value === "scheduled" ? "scheduled" : "now")}><option value="now">立即发送</option><option value="scheduled">定时发送</option></select></label>
+          {sendMode === "scheduled" && <label className="mail-form-row"><span>定时发送</span><input type="datetime-local" value={startTime} onChange={(event) => setStartTime(event.target.value)} /><em>北京时间 {formatBeijingTime(startTime)}</em></label>}
           <label className="mail-form-row"><span>过期时间</span><input type="datetime-local" value={endTime} onChange={(event) => setEndTime(event.target.value)} /><em>北京时间 {formatBeijingTime(endTime)}，{formatTimeDistance(endTime)}</em></label>
           {error && <div className="mail-form-error">{error}</div>}
           <div className="mail-form-actions"><button disabled={submitting} onClick={() => void submit()} type="button">{submitting ? "发送中..." : "发送"}</button><button disabled={submitting} onClick={onBack} type="button">取消</button></div>

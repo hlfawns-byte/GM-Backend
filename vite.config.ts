@@ -54,6 +54,21 @@ type UserLogRecord = {
   result: string;
 };
 
+type ScheduledMailRecord = {
+  id: string;
+  serverUrl: string;
+  game?: string;
+  serverName?: string;
+  operator?: string;
+  body: Record<string, unknown>;
+  scheduleAt: number;
+  createdAt: number;
+  status: "pending" | "sending" | "sent" | "failed";
+  error?: string;
+  sentAt?: number;
+  response?: unknown;
+};
+
 const portal = process.env.GM_PORTAL === "prod" ? "prod" : "test";
 const accountsFile = path.resolve(`data/${portal}/accounts.json`);
 const adminCredentialFile = path.resolve(`data/${portal}/admin-credentials.json`);
@@ -63,6 +78,7 @@ const itemsFile = path.resolve(`data/${portal}/items.json`);
 const itemUploadFile = path.resolve(`data/${portal}/uploads/Item.xlsx`);
 const mailTemplatesFile = path.resolve(`data/${portal}/mail-templates.json`);
 const rewardTemplatesFile = path.resolve(`data/${portal}/reward-templates.json`);
+const scheduledMailsFile = path.resolve(`data/${portal}/scheduled-mails.json`);
 const userLogsFile = path.resolve(`data/${portal}/user-logs.json`);
 const noticesFile = path.resolve(`data/${portal}/notices.json`);
 const gmServerTarget = "http://52.77.195.98:9089";
@@ -258,6 +274,55 @@ function writeAdminCredentials(credentials: AdminCredentials) {
   fs.writeFileSync(adminCredentialFile, JSON.stringify(credentials, null, 2), "utf8");
 }
 
+function readScheduledMails(): ScheduledMailRecord[] {
+  return readJsonFile<ScheduledMailRecord[]>(scheduledMailsFile, []);
+}
+
+function writeScheduledMails(mails: ScheduledMailRecord[]) {
+  writeJsonFile(scheduledMailsFile, mails);
+}
+
+function credentialsForServer(serverUrl: unknown): AdminCredentials | null {
+  const normalized = String(serverUrl ?? "").trim().replace(/\/$/, "");
+  const game = readGames().find((item) => String(item.serverUrl ?? "").trim().replace(/\/$/, "") === normalized);
+  const serverAccount = String(game?.serverAccount ?? "").trim();
+  const serverPassword = String(game?.serverPassword ?? "").trim();
+  if (serverAccount && serverPassword) return { account: serverAccount, password: serverPassword };
+  return readAdminCredentials();
+}
+
+async function postToGameServer(serverUrl: unknown, endpoint: string, body: unknown) {
+  const credentials = credentialsForServer(serverUrl);
+  if (!credentials) throw new Error("缺少游戏服务端管理员账号密码");
+  const token = await loginToGameServer(serverUrl, credentials);
+  const upstream = await fetch(`${gmApiBase(serverUrl)}${endpoint}`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json", Token: token },
+    body: JSON.stringify(body ?? {}),
+  });
+  const text = await upstream.text();
+  let payload: unknown = {};
+  try {
+    payload = text ? JSON.parse(text) : {};
+  } catch {
+    payload = { raw: text };
+  }
+  return { ok: upstream.ok, status: upstream.status, payload };
+}
+
+function publicScheduledMail(task: ScheduledMailRecord) {
+  return {
+    ...task.body,
+    Id: task.id,
+    St: task.scheduleAt,
+    CreateTime: task.createdAt,
+    __scheduled: true,
+    __scheduledStatus: task.status,
+    __scheduledError: task.error,
+    __serverName: task.serverName,
+  };
+}
+
 function readAdminProfile(account: string) {
   const profile = readJsonFile<Record<string, unknown>>(adminProfileFile, {});
   return {
@@ -337,10 +402,57 @@ async function loginToGameServer(serverUrl: unknown, credentials: AdminCredentia
   return token;
 }
 
+let scheduledMailRunning = false;
+async function processScheduledMails() {
+  if (scheduledMailRunning) return;
+  scheduledMailRunning = true;
+  try {
+    const now = Math.floor(Date.now() / 1000);
+    const mails = readScheduledMails();
+    let changed = false;
+    for (const task of mails) {
+      if (task.status !== "pending" || Number(task.scheduleAt) > now) continue;
+      task.status = "sending";
+      changed = true;
+      writeScheduledMails(mails);
+      try {
+        const result = await postToGameServer(task.serverUrl, "/gmMailAdd", task.body);
+        const payload = result.payload && typeof result.payload === "object" ? result.payload as Record<string, unknown> : {};
+        const data = payload.data && typeof payload.data === "object" ? payload.data as Record<string, unknown> : {};
+        const businessResult = data.Result ?? payload.Result;
+        if (!result.ok || (businessResult !== undefined && Number(businessResult) !== 0)) {
+          throw new Error(String(payload.result ?? payload.error ?? `HTTP ${result.status}`));
+        }
+        task.status = "sent";
+        task.sentAt = Math.floor(Date.now() / 1000);
+        task.response = result.payload;
+        appendUserLog({ operator: task.operator || "unknown", role: "管理员", action: "发送定时邮件", target: task.id, game: task.game, serverName: task.serverName, result: "成功" });
+      } catch (error) {
+        task.status = "failed";
+        task.error = error instanceof Error ? error.message : "发送失败";
+        appendUserLog({ operator: task.operator || "unknown", role: "管理员", action: "发送定时邮件", target: task.id, game: task.game, serverName: task.serverName, detail: task.error, result: "失败" });
+      }
+      changed = true;
+      writeScheduledMails(mails);
+    }
+    if (changed) {
+      writeScheduledMails(mails.filter((task) => task.status !== "sent").slice(0, 500));
+    }
+  } finally {
+    scheduledMailRunning = false;
+  }
+}
+
 function localAccountPlugin() {
+  let timer: NodeJS.Timeout | undefined;
   return {
     name: "local-account-api",
     configureServer(server: import("vite").ViteDevServer) {
+      timer = setInterval(() => void processScheduledMails(), 10_000);
+      void processScheduledMails();
+      server.httpServer?.once("close", () => {
+        if (timer) clearInterval(timer);
+      });
       server.middlewares.use(async (req, res, next) => {
         const url = req.url ?? "";
         const pathname = url.split("?")[0];
@@ -516,6 +628,57 @@ function localAccountPlugin() {
 
         if (url === "/local-api/reward-templates" && req.method === "GET") {
           sendJson(res, 200, { templates: readJsonFile(rewardTemplatesFile, []) });
+          return;
+        }
+
+        if (pathname === "/local-api/scheduled-mails" && req.method === "GET") {
+          const serverUrl = String(new URL(req.url ?? "", "http://localhost").searchParams.get("serverUrl") ?? "").trim();
+          const mails = readScheduledMails()
+            .filter((task) => !serverUrl || String(task.serverUrl ?? "") === serverUrl)
+            .filter((task) => task.status !== "sent")
+            .map(publicScheduledMail);
+          sendJson(res, 200, { mails });
+          return;
+        }
+
+        if (pathname === "/local-api/scheduled-mails" && req.method === "POST") {
+          const body = await readJsonBody(req);
+          const serverUrl = String(body.serverUrl ?? "").trim();
+          const mailBody = body.body && typeof body.body === "object" ? body.body as Record<string, unknown> : null;
+          const scheduleAt = Number(body.scheduleAt);
+          if (!serverUrl || !mailBody || !Number.isFinite(scheduleAt)) {
+            sendJson(res, 400, { error: "定时邮件参数不完整" });
+            return;
+          }
+          if (scheduleAt <= Math.floor(Date.now() / 1000)) {
+            sendJson(res, 400, { error: "定时发送时间必须晚于当前时间" });
+            return;
+          }
+          const task: ScheduledMailRecord = {
+            id: `scheduled-${Date.now()}`,
+            serverUrl,
+            game: String(body.game ?? ""),
+            serverName: String(body.serverName ?? ""),
+            operator: String(body.operator ?? ""),
+            body: { ...mailBody, St: 0 },
+            scheduleAt,
+            createdAt: Math.floor(Date.now() / 1000),
+            status: "pending",
+          };
+          writeScheduledMails([task, ...readScheduledMails()]);
+          appendUserLog({ operator: task.operator || "unknown", role: "管理员", action: "创建定时邮件", target: task.id, game: task.game, serverName: task.serverName, detail: `计划发送时间 ${scheduleAt}`, result: "成功" });
+          sendJson(res, 200, { mail: publicScheduledMail(task) });
+          return;
+        }
+
+        const scheduledMailMatch = pathname.match(/^\/local-api\/scheduled-mails\/([^/]+)$/);
+        if (scheduledMailMatch && req.method === "DELETE") {
+          const id = decodeURIComponent(scheduledMailMatch[1]);
+          const mails = readScheduledMails();
+          const task = mails.find((item) => String(item.id) === id);
+          writeScheduledMails(mails.filter((item) => String(item.id) !== id));
+          if (task) appendUserLog({ operator: task.operator || "unknown", role: "管理员", action: "撤回定时邮件", target: id, game: task.game, serverName: task.serverName, result: "成功" });
+          sendJson(res, 200, { Result: 0, id });
           return;
         }
 
