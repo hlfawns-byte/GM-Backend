@@ -840,8 +840,15 @@ async function processScheduledMails() {
     const mails = readScheduledMails();
     let changed = false;
     for (const task of mails) {
-      if (task.status !== "pending" || Number(task.scheduleAt) > now) continue;
+      const canRecoverSending = task.status === "sending" && now - Number(task.lastAttemptAt ?? 0) > 60;
+      const canRetryFailed = task.status === "failed" && Number(task.retryCount ?? 0) < 3 && now - Number(task.lastAttemptAt ?? 0) > 60;
+      if (!["pending", "sending", "failed"].includes(task.status) || Number(task.scheduleAt) > now) continue;
+      if (task.status === "sending" && !canRecoverSending) continue;
+      if (task.status === "failed" && !canRetryFailed) continue;
       task.status = "sending";
+      task.lastAttemptAt = now;
+      task.retryCount = Number(task.retryCount ?? 0) + 1;
+      task.error = undefined;
       changed = true;
       writeScheduledMails(mails);
       try {
