@@ -1841,7 +1841,8 @@ tbody tr:hover,
 }
 
 .mail-id-cell,
-.mail-time-cell {
+.mail-time-cell,
+.mail-target-summary {
   display: inline-grid;
   gap: 5px;
   justify-items: start;
@@ -1869,6 +1870,20 @@ tbody tr:hover,
 
 .mail-time-cell span {
   white-space: normal;
+}
+
+.mail-target-summary span {
+  display: inline-flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  align-items: baseline;
+  white-space: normal;
+}
+
+.mail-target-summary em {
+  color: #7a8798;
+  font-size: 12px;
+  font-style: normal;
 }
 
 .mail-status,

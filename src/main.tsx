@@ -447,10 +447,10 @@ function toVersionNumberArray(value?: string) {
     .map((item) => item.trim())
     .filter(Boolean)
     .flatMap((item) => {
-      if (!/^\d+\.\d+\.\d+$/.test(item)) return [];
-      const [major, minor, patch] = item.split(".").map((part) => Number(part));
-      if (![major, minor, patch].every((part) => Number.isInteger(part) && part >= 0 && part <= 99)) return [];
-      const versionCode = major * 10000 + minor * 100 + patch;
+      if (!/^\d+(?:\.\d+){2,3}$/.test(item)) return [];
+      const parts = item.split(".").map((part) => Number(part));
+      if (!parts.every((part) => Number.isInteger(part) && part >= 0 && part <= 99)) return [];
+      const versionCode = parts.reduce((total, part, index) => total + part * Math.pow(100, parts.length - index - 1), 0);
       return [versionCode, versionCode * 100 + 1];
     });
 }
@@ -2028,8 +2028,6 @@ function MailListPage({ active, localMailRows, mailRows, onCreate, onDelete, onE
             const targetIds = getArray(row.TargetID);
             const typ = Number(row.Typ);
             const isServerMail = typ === 2;
-            const serverNames = targetIds.map((targetId) => serverOptions.find((server) => server.id === Number(targetId))?.name ?? `游戏内区服 ${String(targetId)}`);
-            const target = targetIds.length ? isServerMail ? serverNames.join(", ") : `用户 ${formatCell(row.TargetID)}` : "全服";
             const typeName = isServerMail ? "区服" : typ === 3 || (!typ && targetIds.length > 0) ? "个人" : "全局";
             const title = formatCell(row.Titel ?? row.Title ?? "自定义邮件");
             const state = Number(row.St);
@@ -2041,7 +2039,7 @@ function MailListPage({ active, localMailRows, mailRows, onCreate, onDelete, onE
             return {
               ID: <span className="mail-id-cell"><span>{id}</span><em>{typeName}</em></span>,
               模板名称: title,
-              目标: target,
+              目标: <MailTargetSummary row={row} serverOptions={serverOptions} />,
               状态: statusText,
               时间: <span className="mail-time-cell"><span>注册开始: {formatTimestamp(row.RegtBegin)}</span><span>注册结束: {formatTimestamp(regEnd)}</span><span>生效时间: {formatTimestamp(row.St)}</span><span>过期时间: {formatTimestamp(row.Et)}</span><span>创建时间: {formatTimestampValue(createdAt)}</span></span>,
               操作: <div className="mail-action-buttons"><button onClick={() => onEdit(row)} type="button">编辑</button><button onClick={() => void onDelete(id)} type="button">撤回</button></div>,
@@ -2061,6 +2059,32 @@ function MailDataTable({ columns, rows }: { columns: string[]; rows: Array<Recor
       <tbody>{rows.length ? rows.map((row, index) => <tr key={index}>{columns.map((column) => <td key={column}>{row[column] ?? "暂无数据"}</td>)}</tr>) : <tr><td colSpan={columns.length}>暂无数据</td></tr>}</tbody>
     </table>
   );
+}
+
+function MailTargetSummary({ row, serverOptions }: { row: Record<string, unknown>; serverOptions: ServerOption[] }) {
+  const targetIds = getArray(row.TargetID);
+  const typ = Number(row.Typ);
+  const isServerMail = typ === 2;
+  const isPersonalMail = typ === 3 || (!typ && targetIds.length > 0);
+  const targetText = targetIds.length
+    ? isServerMail
+      ? targetIds.map((targetId) => serverOptions.find((server) => server.id === Number(targetId))?.name ?? `游戏内区服 ${String(targetId)}`).join(", ")
+      : `用户 ${formatCell(row.TargetID)}`
+    : isPersonalMail
+      ? "未填写用户"
+      : "全服";
+  const platforms = getArray(row.Platform).map((item) => Number(item)).filter((item) => item === 1 || item === 2);
+  const versions = getArray(row.Version).map((item) => String(item)).filter(Boolean);
+  const regBegin = Number(row.RegtBegin);
+  const regEnd = Number(row.RegtEnd ?? row.Regt);
+  const tags = [
+    { label: "目标", value: targetText },
+    platforms.length ? { label: "系统", value: platforms.map((item) => item === 1 ? "GooglePlay" : "iOS").join(", ") } : null,
+    versions.length ? { label: "版本", value: versions.join(", ") } : null,
+    regBegin > 0 ? { label: "注册开始", value: formatTimestamp(regBegin) } : null,
+    regEnd > 0 ? { label: "注册结束", value: formatTimestamp(regEnd) } : null,
+  ].filter((item): item is { label: string; value: string } => Boolean(item));
+  return <span className="mail-target-summary">{tags.map((item) => <span key={item.label}><em>{item.label}</em>{item.value}</span>)}</span>;
 }
 
 function MailEditor({ canUploadItemTable, global, initialMail, items, onBack, onSubmit, onUploadItemTable, rewardTemplates, serverOptions, templates }: { canUploadItemTable: boolean; global: boolean; initialMail?: Record<string, unknown>; items: ItemOption[]; onBack: () => void; onSubmit: (body: unknown) => Promise<string | void>; onUploadItemTable: (file: File) => Promise<void>; rewardTemplates: RewardTemplate[]; serverOptions: ServerOption[]; templates: MailTemplate[] }) {
@@ -2166,7 +2190,7 @@ function MailEditor({ canUploadItemTable, global, initialMail, items, onBack, on
       return;
     }
     if (conditionRows.some((row) => row.field === "version" && row.value.trim() && !toVersionNumberArray(row.value).length)) {
-      setError("APP版本请填写 x.x.x 格式，例如 1.8.4");
+      setError("APP版本请填写 x.x.x 或 x.x.x.x 格式，例如 1.8.0.0");
       return;
     }
     if (conditionRows.some((row) => row.field === "system" && row.value.trim() && !toPlatformNumberArray(row.value).length)) {
@@ -2284,7 +2308,7 @@ function MailEditor({ canUploadItemTable, global, initialMail, items, onBack, on
                         {serverOptions.map((server) => <option key={server.id} value={server.id}>{server.name}</option>)}
                       </select>
                     ) : (
-                      <input disabled={unsupported} value={row.value} onChange={(event) => setFilterRows((current) => current.map((item) => item.id === row.id ? { ...item, value: event.target.value } : item))} placeholder={unsupported ? "当前接口暂未开放" : row.field === "version" ? "例如 1.8.4" : row.field === "server" ? "例如 12 或 1,2" : "例如 1,2"} />
+                      <input disabled={unsupported} value={row.value} onChange={(event) => setFilterRows((current) => current.map((item) => item.id === row.id ? { ...item, value: event.target.value } : item))} placeholder={unsupported ? "当前接口暂未开放" : row.field === "version" ? "例如 1.8.0.0" : row.field === "server" ? "例如 12 或 1,2" : "例如 1,2"} />
                     )}
                     <button className="mail-condition-remove" onClick={() => setFilterRows((current) => current.filter((item) => item.id !== row.id))} type="button">删除</button>
                   </div>
@@ -2856,7 +2880,7 @@ function NoticePage({ postWithToken }: { postWithToken: (endpoint: string, body:
               <label>注册开始<input type="datetime-local" value={form.regBegin ?? ""} onChange={(event) => setForm({ ...form, regBegin: event.target.value })} /></label>
               <label>注册结束<input type="datetime-local" value={form.regEnd ?? ""} onChange={(event) => setForm({ ...form, regEnd: event.target.value })} /></label>
               <label>系统筛选<input value={form.platforms ?? ""} onChange={(event) => setForm({ ...form, platforms: event.target.value })} placeholder="1=GooglePlay，2=iOS；留空全部" /></label>
-              <label>版本筛选<input value={form.versions ?? ""} onChange={(event) => setForm({ ...form, versions: event.target.value })} placeholder="例如 10800,1080001；留空全部" /></label>
+              <label>版本筛选<input value={form.versions ?? ""} onChange={(event) => setForm({ ...form, versions: event.target.value })} placeholder="例如 1.8.0.0；留空全部" /></label>
               <footer><button onClick={() => void save()} type="button">保存</button><button onClick={() => setEditing(null)} type="button">取消</button></footer>
             </div>
           </section>
@@ -2895,7 +2919,7 @@ function configsToNoticePayload(configs: NoticeConfig[]) {
     payload[`RegtBegin${slot}`] = config.regBegin ? parseDatetimeLocalSeconds(config.regBegin) : 0;
     payload[`RegtEnd${slot}`] = config.regEnd ? parseDatetimeLocalSeconds(config.regEnd) : 0;
     const platforms = toFlexibleNumberArray(config.platforms);
-    const versions = toFlexibleNumberArray(config.versions);
+    const versions = toVersionNumberArray(config.versions);
     payload[`Platform${slot}`] = platforms.length ? platforms : null;
     payload[`Version${slot}`] = versions.length ? versions : null;
   }
