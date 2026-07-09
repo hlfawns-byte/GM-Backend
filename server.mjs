@@ -506,6 +506,16 @@ async function handleLocalApi(req, res, pathname) {
     const templates = readJson(files.rewardTemplates, []);
     const now = Math.floor(Date.now() / 1000);
     const id = String(body.id ?? `r-${Date.now()}`);
+    const title = String(body.title ?? "").trim();
+    if (!title) {
+      sendJson(res, 400, { error: "奖励模板标题不能为空" });
+      return true;
+    }
+    if (title.length > 30) {
+      sendJson(res, 400, { error: "奖励模板标题最多30个字符" });
+      return true;
+    }
+    body.title = title;
     const existing = Array.isArray(templates) ? templates.find((template) => template.id === id) : null;
     const next = { id, title: String(body.title ?? "未命名奖励模板"), items: Array.isArray(body.items) ? body.items : [], createdAt: existing?.createdAt ?? now, updatedAt: now };
     writeJson(files.rewardTemplates, [next, ...(Array.isArray(templates) ? templates : []).filter((template) => template.id !== id)]);

@@ -558,6 +558,79 @@ function getApiData(payload: unknown) {
   return getObject(getObject(payload)?.data) ?? getObject(payload);
 }
 
+function parseTimeSeconds(value: unknown) {
+  if (value === null || value === undefined || value === "") return 0;
+  if (typeof value === "number") return Number.isFinite(value) ? Math.floor(value > 10_000_000_000 ? value / 1000 : value) : 0;
+  const text = String(value).trim();
+  if (!text) return 0;
+  const numeric = Number(text);
+  if (Number.isFinite(numeric)) return Math.floor(numeric > 10_000_000_000 ? numeric / 1000 : numeric);
+  const parsed = new Date(text.replace(/\//g, "-").replace(" ", "T"));
+  return Number.isFinite(parsed.getTime()) ? Math.floor(parsed.getTime() / 1000) : 0;
+}
+
+function indexedValue(data: Record<string, unknown>, keys: string[], index: number) {
+  for (const key of keys) {
+    const value = data[key];
+    if (Array.isArray(value)) return value[index];
+    if (value !== undefined) return value;
+  }
+  return undefined;
+}
+
+function extractPlayerInfoMap(payload: unknown, requestedIds: number[]) {
+  const data = getApiData(payload);
+  const map = new Map<number, Record<string, unknown>>();
+  if (!data) return map;
+  const list = getArray(data.List).length ? getArray(data.List) : getArray(data.Lst).length ? getArray(data.Lst) : getArray(data.Players).length ? getArray(data.Players) : getArray(data.PlayerInfo);
+  if (list.length) {
+    for (const item of list) {
+      const player = getObject(item);
+      if (!player) continue;
+      const id = Number(player.UserId ?? player.Uid ?? player.Id ?? player.Pid);
+      if (Number.isFinite(id)) map.set(id, player);
+    }
+    return map;
+  }
+  requestedIds.forEach((id, index) => {
+    const player = {
+      UserId: indexedValue(data, ["UserId", "Uid", "Id", "Pid"], index) ?? id,
+      RegTime: indexedValue(data, ["RegTime", "RegisterTime", "Regt", "CreateTime"], index),
+      Platform: indexedValue(data, ["Platform", "Plat", "System"], index),
+      Version: indexedValue(data, ["Version", "AppVersion", "Ver"], index),
+    };
+    map.set(id, player);
+  });
+  return map;
+}
+
+function playerMatchesMailConditions(player: Record<string, unknown>, conditionRows: Array<{ field: string; op: string; value: string }>) {
+  for (const row of conditionRows) {
+    if (!row.value.trim()) continue;
+    if (row.field === "regTime") {
+      const regTime = parseTimeSeconds(player.RegTime ?? player.RegisterTime ?? player.Regt ?? player.CreateTime);
+      const conditionTime = parseDatetimeLocalSeconds(dateToDatetimeLocal(row.value, row.op === "<="));
+      if (!regTime || !conditionTime) return false;
+      if (row.op === ">=" && regTime < conditionTime) return false;
+      if (row.op === "<=" && regTime > conditionTime) return false;
+    }
+    if (row.field === "system") {
+      const platforms = toPlatformNumberArray(row.value) as number[];
+      const platform = Number(player.Platform ?? player.Plat ?? player.System);
+      if (!platforms.length || !Number.isFinite(platform)) return false;
+      if (row.op === "!=" ? platforms.includes(platform) : !platforms.includes(platform)) return false;
+    }
+    if (row.field === "version") {
+      const versions = toVersionNumberArray(row.value);
+      const version = parseFlexibleNumber(String(player.Version ?? player.AppVersion ?? player.Ver ?? ""));
+      if (!versions.length || !Number.isFinite(version)) return false;
+      const matched = versions.some((item, index) => index % 2 === 0 ? version >= item && version < (versions[index + 1] ?? item + 1) : false);
+      if (row.op === "!=" ? matched : !matched) return false;
+    }
+  }
+  return true;
+}
+
 function humanizeApiError(message: string) {
   if (/id\[\d+\].*服务器不存在/.test(message) || /服务器不存在/.test(message)) return "区服未填写，或填写的区服不存在";
   if (/TargetID|UserId|用户.*不存在|玩家.*不存在/i.test(message)) return "用户ID未填写，或用户不存在";
@@ -753,58 +826,6 @@ function App() {
     void writeUserLog({ action: "调整游戏排序", target: `${orderedIds.length} 个游戏区服` });
   };
 
-  if (!session) {
-    return <><GameSelectScreen auth={auth} games={games} onEnter={setSession} onLogout={logout} onReorder={reorderGames} />{versionModal}</>;
-  }
-
-  const moduleConfig = modules[active];
-
-  const refreshSessionToken = async () => {
-    const response = await fetch("/local-api/gm-token", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ serverUrl: session.serverUrl }),
-    });
-    const payload = (await response.json().catch(() => ({}))) as { token?: string; adminAccount?: string; error?: string };
-    if (!response.ok || !payload.token) throw new Error(payload.error || "Token 已过期，请重新登录");
-    const nextSession = { ...session, adminAccount: payload.adminAccount ?? session.adminAccount, token: payload.token };
-    setSession(nextSession);
-    return payload.token;
-  };
-
-  const postWithToken = async (endpoint: string, body: unknown): Promise<ApiPostResponse> => {
-    const send = async (token: string) => {
-      const response = await fetch("/local-api/gm-post", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ serverUrl: session.serverUrl, endpoint, token, body }),
-      });
-      const text = await response.text();
-      return { ok: response.ok, status: response.status, payload: parseJson(text) };
-    };
-    const first = await send(session.token);
-    if (first.status !== 401) {
-      void writeUserLog({ action: "服务端接口", target: endpoint, detail: JSON.stringify(body).slice(0, 300), result: first.ok ? "成功" : "失败" });
-      return first;
-    }
-    const freshToken = await refreshSessionToken();
-    const retried = await send(freshToken);
-    void writeUserLog({ action: "服务端接口", target: endpoint, detail: JSON.stringify(body).slice(0, 300), result: retried.ok ? "成功" : "失败" });
-    return retried;
-  };
-
-  const apiPost = async (action: ApiAction, values: Record<string, string>) => {
-    if (!action.endpoint) return;
-    setLoadingAction(action.key);
-    try {
-      const body = action.buildBody ? action.buildBody(values) : values;
-      const result = await postWithToken(action.endpoint, body);
-      setResults((current) => [{ id: Date.now(), label: action.label, endpoint: action.endpoint ?? "", ok: result.ok, status: result.status, payload: result.payload }, ...current].slice(0, 8));
-    } finally {
-      setLoadingAction("");
-    }
-  };
-
   const createAccount = async (account: ManagedAccount) => {
     const response = await fetch("/local-api/accounts", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(account) });
     if (!response.ok) {
@@ -873,6 +894,83 @@ function App() {
     setAuth(nextAuth);
     await refreshAccounts();
     void writeUserLog({ action: "修改个人信息", target: auth.operatorAccount });
+  };
+
+  const sharedPanels = (
+    <>
+      {auth.isAdmin && accountPanelOpen && <AccountPanel accounts={accounts} games={games} canManageAdmins={auth.isRootAdmin} session={session} onAdd={createAccount} onDelete={deleteAccount} onUpdate={updateAccount} onClose={() => setAccountPanelOpen(false)} />}
+      {auth.isAdmin && gamePanelOpen && <GamePanel games={games} onAdd={createGame} onDelete={deleteGame} onUpdate={updateGame} onClose={() => setGamePanelOpen(false)} />}
+      {auth.isAdmin && logPanelOpen && <UserLogPanel onClose={() => setLogPanelOpen(false)} />}
+      {profilePanelOpen && auth && <ProfilePanel auth={auth} onClose={() => setProfilePanelOpen(false)} onSave={updateProfile} />}
+    </>
+  );
+
+  if (!session) {
+    return (
+      <>
+        <GameSelectScreen
+          auth={auth}
+          games={games}
+          onEnter={setSession}
+          onLogout={logout}
+          onManageAccounts={() => setAccountPanelOpen(true)}
+          onManageGames={() => setGamePanelOpen(true)}
+          onOpenLogs={() => setLogPanelOpen(true)}
+          onOpenProfile={() => setProfilePanelOpen(true)}
+          onReorder={reorderGames}
+        />
+        {sharedPanels}
+        {versionModal}
+      </>
+    );
+  }
+
+  const moduleConfig = modules[active];
+
+  const refreshSessionToken = async () => {
+    const response = await fetch("/local-api/gm-token", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ serverUrl: session.serverUrl }),
+    });
+    const payload = (await response.json().catch(() => ({}))) as { token?: string; adminAccount?: string; error?: string };
+    if (!response.ok || !payload.token) throw new Error(payload.error || "Token 已过期，请重新登录");
+    const nextSession = { ...session, adminAccount: payload.adminAccount ?? session.adminAccount, token: payload.token };
+    setSession(nextSession);
+    return payload.token;
+  };
+
+  const postWithToken = async (endpoint: string, body: unknown): Promise<ApiPostResponse> => {
+    const send = async (token: string) => {
+      const response = await fetch("/local-api/gm-post", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ serverUrl: session.serverUrl, endpoint, token, body }),
+      });
+      const text = await response.text();
+      return { ok: response.ok, status: response.status, payload: parseJson(text) };
+    };
+    const first = await send(session.token);
+    if (first.status !== 401) {
+      void writeUserLog({ action: "服务端接口", target: endpoint, detail: JSON.stringify(body).slice(0, 300), result: first.ok ? "成功" : "失败" });
+      return first;
+    }
+    const freshToken = await refreshSessionToken();
+    const retried = await send(freshToken);
+    void writeUserLog({ action: "服务端接口", target: endpoint, detail: JSON.stringify(body).slice(0, 300), result: retried.ok ? "成功" : "失败" });
+    return retried;
+  };
+
+  const apiPost = async (action: ApiAction, values: Record<string, string>) => {
+    if (!action.endpoint) return;
+    setLoadingAction(action.key);
+    try {
+      const body = action.buildBody ? action.buildBody(values) : values;
+      const result = await postWithToken(action.endpoint, body);
+      setResults((current) => [{ id: Date.now(), label: action.label, endpoint: action.endpoint ?? "", ok: result.ok, status: result.status, payload: result.payload }, ...current].slice(0, 8));
+    } finally {
+      setLoadingAction("");
+    }
   };
 
   return (
@@ -949,10 +1047,7 @@ function App() {
           )}
         </div>
       </section>
-      {auth.isAdmin && accountPanelOpen && <AccountPanel accounts={accounts} games={games} canManageAdmins={auth.isRootAdmin} session={session} onAdd={createAccount} onDelete={deleteAccount} onUpdate={updateAccount} onClose={() => setAccountPanelOpen(false)} />}
-      {auth.isAdmin && gamePanelOpen && <GamePanel games={games} onAdd={createGame} onDelete={deleteGame} onUpdate={updateGame} onClose={() => setGamePanelOpen(false)} />}
-      {auth.isAdmin && logPanelOpen && <UserLogPanel onClose={() => setLogPanelOpen(false)} />}
-      {profilePanelOpen && auth && <ProfilePanel auth={auth} onClose={() => setProfilePanelOpen(false)} onSave={updateProfile} />}
+      {sharedPanels}
     </main>
     {versionModal}
     </>
@@ -1160,7 +1255,7 @@ function LoginScreen({ games, onLogin }: { games: GameConfig[]; onLogin: (sessio
   );
 }
 
-function GameSelectScreen({ auth, games, onEnter, onLogout, onReorder }: { auth: AuthSession; games: GameConfig[]; onEnter: (session: Session) => void; onLogout: () => void; onReorder: (orderedIds: number[]) => Promise<void> }) {
+function GameSelectScreen({ auth, games, onEnter, onLogout, onManageAccounts, onManageGames, onOpenLogs, onOpenProfile, onReorder }: { auth: AuthSession; games: GameConfig[]; onEnter: (session: Session) => void; onLogout: () => void; onManageAccounts: () => void; onManageGames: () => void; onOpenLogs: () => void; onOpenProfile: () => void; onReorder: (orderedIds: number[]) => Promise<void> }) {
   const [error, setError] = React.useState("");
   const [entering, setEntering] = React.useState("");
   const [orderedGames, setOrderedGames] = React.useState<GameConfig[]>([]);
@@ -1307,7 +1402,17 @@ function GameSelectScreen({ auth, games, onEnter, onLogout, onReorder }: { auth:
         <header className="portal-topbar">
           <div className="topbar-left"><span className="breadcrumb">游戏列表</span></div>
           <div className="topbar-right">
-            <div className="identity-stack"><span>{auth.operatorAccount}</span><small>请选择游戏区服</small></div>
+            {auth.isAdmin && (
+              <>
+                <button className="account-button" onClick={onManageGames} type="button"><Plus size={15} />游戏区服</button>
+                <button className="account-button" onClick={onManageAccounts} type="button"><UserCog size={15} />账号管理</button>
+                <button className="account-button" onClick={onOpenLogs} type="button"><Database size={15} />用户日志</button>
+              </>
+            )}
+            <button className="profile-button" onClick={onOpenProfile} type="button" title="个人信息设置">
+              <AvatarImage account={auth.operatorAccount} avatarUrl={auth.avatarUrl} displayName={auth.displayName || auth.operatorAccount} />
+              <span>{auth.displayName || auth.operatorAccount}</span>
+            </button>
             <button className="icon-button" onClick={onLogout} type="button" title="退出"><LogOut size={18} /></button>
           </div>
         </header>
@@ -1902,6 +2007,35 @@ function MailSuitePage({ active, canUploadItemTable, postWithToken, session, set
         onBack={() => setView("list")}
         onSubmit={async (body) => {
           const submitted = getObject(body) ?? {};
+          const conditionRows = getArray(submitted.__conditionRows)
+            .map((row) => getObject(row))
+            .filter((row): row is { field: string; op: string; value: string } => Boolean(row))
+            .map((row) => ({ field: String(row.field ?? ""), op: String(row.op ?? "="), value: String(row.value ?? "") }));
+          const serverBody: Record<string, unknown> = { ...submitted };
+          delete serverBody.__conditionRows;
+          if (Number(serverBody.Typ) === 3 && conditionRows.some((row) => row.value.trim())) {
+            const targets = getArray(serverBody.TargetID).map((item) => Number(item)).filter((item) => Number.isFinite(item));
+            const infoResult = await postWithToken("/gmPlayerInfo", { Typ: 1, UserId: targets });
+            const infoError = apiBusinessError(infoResult);
+            if (infoError) throw new Error(`个人邮件条件校验失败：${infoError}`);
+            const playerMap = extractPlayerInfoMap(infoResult.payload, targets);
+            const matchedTargets = targets.filter((targetId) => {
+              const player = playerMap.get(targetId);
+              return player ? playerMatchesMailConditions(player, conditionRows) : false;
+            });
+            if (!matchedTargets.length) {
+              throw new Error("没有符合条件的用户，邮件未发送");
+            }
+            if (matchedTargets.length < targets.length) {
+              const removed = targets.filter((targetId) => !matchedTargets.includes(targetId));
+              setStatus(`已按条件过滤，排除了 ${removed.length} 个不符合条件的用户`);
+            }
+            serverBody.TargetID = matchedTargets;
+            serverBody.RegtBegin = 0;
+            serverBody.Regt = parseDatetimeLocalSeconds(defaultRegEndTime());
+            serverBody.Platform = [];
+            serverBody.Version = [];
+          }
           const startSeconds = Number(submitted.St);
           const isScheduled = Number.isFinite(startSeconds) && startSeconds > Math.floor(Date.now() / 1000) + 5;
           if (isScheduled) {
@@ -1914,7 +2048,7 @@ function MailSuitePage({ active, canUploadItemTable, postWithToken, session, set
                 serverName: session.serverName,
                 operator: session.operatorAccount,
                 scheduleAt: startSeconds,
-                body,
+                body: serverBody,
               }),
             });
             const payload = (await response.json().catch(() => ({}))) as { mail?: Record<string, unknown>; error?: string };
@@ -1927,7 +2061,7 @@ function MailSuitePage({ active, canUploadItemTable, postWithToken, session, set
             setLocalMailRows((current) => [localRow, ...current.filter((row) => String(row.Id) !== String(localRow.Id))].slice(0, 50));
             return message;
           }
-          const result = await postWithToken("/gmMailAdd", body);
+          const result = await postWithToken("/gmMailAdd", serverBody);
           const error = apiBusinessError(result);
           if (error) {
             throw new Error(`邮件提交失败：${error}`);
@@ -1944,8 +2078,8 @@ function MailSuitePage({ active, canUploadItemTable, postWithToken, session, set
           };
           const message = `邮件已提交到服务器${data?.Id ? `，ID：${String(data.Id)}` : ""}`;
           setStatus(message);
-          const submittedTyp = Number(getObject(body)?.Typ);
-          const submittedTargets = getArray(getObject(body)?.TargetID);
+          const submittedTyp = Number(serverBody.Typ);
+          const submittedTargets = getArray(serverBody.TargetID);
           setView("list");
           setEditingMailRow(undefined);
           setLocalMailRows((current) => [localRow, ...current.filter((row) => String(row.Id) !== String(localRow.Id))].slice(0, 20));
@@ -2179,8 +2313,9 @@ function MailEditor({ canUploadItemTable, global, initialMail, items, onBack, on
     const serverTargetIds = isGlobalMail ? filterRows.filter((row) => row.field === "server").flatMap((row) => toFlexibleNumberArray(row.value)) : [];
     const regBeginValues = conditionRows.filter((row) => row.field === "regTime" && row.op === ">=" && row.value).map((row) => parseDatetimeLocalSeconds(dateToDatetimeLocal(row.value)));
     const regEndValues = conditionRows.filter((row) => row.field === "regTime" && row.op === "<=" && row.value).map((row) => parseDatetimeLocalSeconds(dateToDatetimeLocal(row.value, true)));
-    const regBeginSeconds = regBeginValues[0] ?? parseDatetimeLocalSeconds(MAIL_DEFAULT_REG_BEGIN);
-    const regEndSeconds = regEndValues[0] ?? parseDatetimeLocalSeconds(defaultRegEndTime());
+    const hasRegCondition = conditionRows.some((row) => row.field === "regTime" && row.value.trim());
+    const regBeginSeconds = regBeginValues.length ? Math.max(...regBeginValues) : hasRegCondition ? 0 : parseDatetimeLocalSeconds(MAIL_DEFAULT_REG_BEGIN);
+    const regEndSeconds = regEndValues.length ? Math.min(...regEndValues) : parseDatetimeLocalSeconds(defaultRegEndTime());
     if (regBeginValues.some((value) => !value) || regEndValues.some((value) => !value)) {
       setError("请选择有效的注册时间区间");
       return;
@@ -2256,6 +2391,7 @@ function MailEditor({ canUploadItemTable, global, initialMail, items, onBack, on
         ItemLst: rewardValidation.itemList,
         Platform: platformList,
         Version: versionList,
+        __conditionRows: conditionRows,
       });
       setError("保存成功，正在返回列表...");
     } catch (submitError) {
@@ -2325,7 +2461,7 @@ function MailEditor({ canUploadItemTable, global, initialMail, items, onBack, on
                 );
               })}
               <button className="mail-add-condition" onClick={() => setFilterRows((current) => [...current, { id: Date.now() + current.length, field: "version", op: "=", value: "" }])} type="button">新增条件</button>
-              <small className="mail-condition-hint">{isGlobalMail ? "多个条件同时填写时为且的关系。填写“游戏内区服”后，会按接口 Typ=2 将 TargetID 作为区服ID发送。" : "多个条件同时填写时为且的关系。个人邮件不会提交游戏内区服条件。"}</small>
+              <small className="mail-condition-hint">{isGlobalMail ? "多个条件同时填写时为且的关系。填写“游戏内区服”后，会按接口 Typ=2 将 TargetID 作为区服ID发送。" : "多个条件同时填写时为且的关系。个人邮件会先由GM后台筛选用户，再提交符合条件的用户ID。"}</small>
             </div>
           </div>
           <label className="mail-form-row"><span>奖励模板</span><select value={rewardTemplateId} onChange={(event) => setRewardTemplateId(event.target.value)}><option value="custom">自定义</option>{rewardTemplates.map((template) => <option key={template.id} value={template.id}>{template.title}</option>)}</select></label>
@@ -2347,11 +2483,17 @@ function MailEditor({ canUploadItemTable, global, initialMail, items, onBack, on
 function RewardRows({ canUploadItemTable = true, items, onUploadItemTable, rewards, setRewards }: { canUploadItemTable?: boolean; items: ItemOption[]; onUploadItemTable: (file: File) => Promise<void>; rewards: MailRewardItem[]; setRewards: (items: MailRewardItem[]) => void }) {
   const [uploading, setUploading] = React.useState(false);
   const [uploadError, setUploadError] = React.useState("");
+  const [addCount, setAddCount] = React.useState("1");
   const updateReward = (index: number, patch: Partial<MailRewardItem>) => {
     setRewards(rewards.map((reward, rewardIndex) => rewardIndex === index ? { ...reward, ...patch } : reward));
   };
   const deleteReward = (index: number) => {
     setRewards(rewards.length > 1 ? rewards.filter((_, rewardIndex) => rewardIndex !== index) : [{ itemId: "", count: "0" }]);
+  };
+  const addRewards = () => {
+    const count = Math.max(1, Math.min(50, Number.parseInt(addCount, 10) || 1));
+    setAddCount(String(count));
+    setRewards([...rewards, ...Array.from({ length: count }, () => ({ itemId: "", count: "0" }))]);
   };
   return (
     <div className="mail-reward-block">
@@ -2363,7 +2505,7 @@ function RewardRows({ canUploadItemTable = true, items, onUploadItemTable, rewar
           <button className="mail-delete-reward" onClick={() => deleteReward(index)} title="删除奖励" type="button">删除</button>
         </div>
       ))}
-      <div className="mail-form-row mail-add-reward-row"><span /><button className="mail-add-reward" onClick={() => setRewards([...rewards, { itemId: "", count: "0" }])} type="button">新增</button></div>
+      <div className="mail-form-row mail-add-reward-row"><span /><div className="mail-add-reward-control"><button className="mail-add-reward" onClick={addRewards} type="button">新增</button><input aria-label="新增奖励条目数量" inputMode="numeric" min={1} max={50} type="number" value={addCount} onChange={(event) => setAddCount(event.target.value)} /><small>条</small></div></div>
       {canUploadItemTable && <div className="mail-form-row"><span /><label className={`mail-upload-link ${uploading ? "disabled" : ""}`}>{uploading ? "上传中..." : "上传Item表"}<input accept=".xlsx,.xls" disabled={uploading} onChange={(event) => {
         const file = event.target.files?.[0];
         event.currentTarget.value = "";
@@ -2681,7 +2823,7 @@ function GiftRecallPage() {
 }
 
 function RewardTemplateList({ onCreate, onDelete, onEdit, templates }: { onCreate: () => void; onDelete: (template: RewardTemplate) => Promise<void>; onEdit: (template: RewardTemplate) => void; templates: RewardTemplate[] }) {
-  return <section className="mail-page"><section className="mail-table-card"><button className="mail-primary-button" onClick={onCreate} type="button">新建</button><MailDataTable columns={["title", "创建时间", "更新时间", "操作"]} rows={templates.map((template) => ({ title: template.title, 创建时间: formatTimestampValue(template.createdAt), 更新时间: formatTimestampValue(template.updatedAt), 操作: <div className="mail-action-buttons"><button onClick={() => onEdit(template)} type="button">编辑</button><button onClick={() => void onDelete(template)} type="button">删除</button></div> }))} /></section></section>;
+  return <section className="mail-page"><section className="mail-table-card"><button className="mail-primary-button" onClick={onCreate} type="button">新建</button><MailDataTable columns={["title", "创建时间", "更新时间", "操作"]} rows={templates.map((template) => ({ title: <span className="mail-ellipsis-cell" title={template.title}>{template.title}</span>, 创建时间: formatTimestampValue(template.createdAt), 更新时间: formatTimestampValue(template.updatedAt), 操作: <div className="mail-action-buttons"><button onClick={() => onEdit(template)} type="button">编辑</button><button onClick={() => void onDelete(template)} type="button">删除</button></div> }))} /></section></section>;
 }
 
 function RewardTemplateEditor({ canUploadItemTable, items, onBack, onSaved, onUploadItemTable, template }: { canUploadItemTable: boolean; items: ItemOption[]; onBack: () => void; onSaved: () => void; onUploadItemTable: (file: File) => Promise<void>; template?: RewardTemplate }) {
@@ -2694,6 +2836,10 @@ function RewardTemplateEditor({ canUploadItemTable, items, onBack, onSaved, onUp
     const cleanTitle = title.trim();
     if (!cleanTitle) {
       setError("请输入奖励模板标题");
+      return;
+    }
+    if (cleanTitle.length > MAX_TEMPLATE_NAME_LENGTH) {
+      setError(`奖励模板标题最多${MAX_TEMPLATE_NAME_LENGTH}个字符`);
       return;
     }
     const rewardValidation = validateRewardRows(rewards, items);
@@ -2717,7 +2863,7 @@ function RewardTemplateEditor({ canUploadItemTable, items, onBack, onSaved, onUp
       setSaving(false);
     }
   };
-  return <section className="mail-edit-page"><div className="mail-edit-card reward-template-card"><header>奖励模板</header><div className="mail-form"><label className="mail-form-row"><span>标题</span><input value={title} onChange={(event) => setTitle(event.target.value)} /></label><RewardRows canUploadItemTable={canUploadItemTable} items={items} onUploadItemTable={onUploadItemTable} rewards={rewards} setRewards={setRewards} />{error && <div className="mail-form-error">{error}</div>}<div className="mail-form-actions"><button disabled={saving} onClick={() => void save()} type="button">{saving ? "保存中..." : "保存"}</button><button disabled={saving} onClick={onBack} type="button">取消</button></div></div></div></section>;
+  return <section className="mail-edit-page"><div className="mail-edit-card reward-template-card"><header>奖励模板</header><div className="mail-form"><label className="mail-form-row reward-template-title-row"><span>标题</span><input maxLength={MAX_TEMPLATE_NAME_LENGTH} value={title} onChange={(event) => setTitle(event.target.value)} /><small>{title.length}/{MAX_TEMPLATE_NAME_LENGTH}</small></label><RewardRows canUploadItemTable={canUploadItemTable} items={items} onUploadItemTable={onUploadItemTable} rewards={rewards} setRewards={setRewards} />{error && <div className="mail-form-error">{error}</div>}<div className="mail-form-actions"><button disabled={saving} onClick={() => void save()} type="button">{saving ? "保存中..." : "保存"}</button><button disabled={saving} onClick={onBack} type="button">取消</button></div></div></div></section>;
 }
 
 function toDatetimeLocal(date: Date) {
@@ -2979,9 +3125,10 @@ function configsToNoticePayload(configs: NoticeConfig[]) {
   return payload;
 }
 
-function AccountPanel({ accounts, canManageAdmins, games, session, onAdd, onDelete, onUpdate, onClose }: { accounts: ManagedAccount[]; canManageAdmins: boolean; games: GameConfig[]; session: Session; onAdd: (account: ManagedAccount) => Promise<void>; onDelete: (accountId: number) => Promise<void>; onUpdate: (account: ManagedAccount) => Promise<void>; onClose: () => void }) {
-  const currentGameKey = `${session.game}/${session.serverName}`;
-  const emptyForm = { account: "", password: "", displayName: "", role: "运营", gameKeys: [currentGameKey], permissions: ["用户查询", "日志审计"], isManager: false };
+function AccountPanel({ accounts, canManageAdmins, games, session, onAdd, onDelete, onUpdate, onClose }: { accounts: ManagedAccount[]; canManageAdmins: boolean; games: GameConfig[]; session: Session | null; onAdd: (account: ManagedAccount) => Promise<void>; onDelete: (accountId: number) => Promise<void>; onUpdate: (account: ManagedAccount) => Promise<void>; onClose: () => void }) {
+  const fallbackGameKey = games[0] ? `${games[0].name}/${games[0].serverName}` : "";
+  const currentGameKey = session ? `${session.game}/${session.serverName}` : fallbackGameKey;
+  const emptyForm = { account: "", password: "", displayName: "", role: "运营", gameKeys: currentGameKey ? [currentGameKey] : [], permissions: ["用户查询", "日志审计"], isManager: false };
   const [form, setForm] = React.useState(emptyForm);
   const [editingAccount, setEditingAccount] = React.useState<ManagedAccount | null>(null);
   const [formError, setFormError] = React.useState("");
