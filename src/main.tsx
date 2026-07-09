@@ -192,6 +192,8 @@ type NoticeConfig = {
   title: string;
   body: string;
   imagePath: string;
+  typ?: number;
+  sid?: string;
   regBegin?: string;
   regEnd?: string;
   platforms?: string;
@@ -1827,7 +1829,15 @@ function MailSuitePage({ active, canUploadItemTable, postWithToken, session, set
       return;
     }
     const data = getApiData(result.payload);
-    const rows = getArray(data?.Lst).filter((row): row is Record<string, unknown> => Boolean(getObject(row)));
+    const globalRows = getArray(data?.Lst)
+      .map((row) => getObject(row))
+      .filter((row): row is Record<string, unknown> => Boolean(row))
+      .map((row) => ({ ...row, __mailListType: "global" }));
+    const personalRows = getArray(data?.LstUser)
+      .map((row) => getObject(row))
+      .filter((row): row is Record<string, unknown> => Boolean(row))
+      .map((row) => ({ ...row, Typ: row.Typ ?? 3, __mailListType: "personal" }));
+    const rows = [...globalRows, ...personalRows];
     setMailRows(rows);
   }, [postWithToken]);
 
@@ -1997,7 +2007,7 @@ function MailListPage({ active, localMailRows, mailRows, onCreate, onDelete, onE
     const targetIds = getArray(row.TargetID);
     const typ = Number(row.Typ);
     const isServerMail = typ === 2;
-    const isPersonalMail = typ === 3 || (!typ && targetIds.length > 0);
+    const isPersonalMail = row.__mailListType === "personal" || typ === 3 || (!typ && targetIds.length > 0);
     if (global && isPersonalMail) return false;
     if (!global && !isPersonalMail) return false;
     if (!userIdQuery.trim()) return true;
@@ -2028,7 +2038,7 @@ function MailListPage({ active, localMailRows, mailRows, onCreate, onDelete, onE
             const targetIds = getArray(row.TargetID);
             const typ = Number(row.Typ);
             const isServerMail = typ === 2;
-            const typeName = isServerMail ? "区服" : typ === 3 || (!typ && targetIds.length > 0) ? "个人" : "全局";
+            const typeName = isServerMail ? "区服" : row.__mailListType === "personal" || typ === 3 || (!typ && targetIds.length > 0) ? "个人" : "全局";
             const title = formatCell(row.Titel ?? row.Title ?? "自定义邮件");
             const state = Number(row.St);
             const statusText = row.__scheduled
@@ -2805,8 +2815,9 @@ function UnavailablePanel({ module }: { module: ModuleConfig }) {
 
 function NoticePage({ postWithToken }: { postWithToken: (endpoint: string, body: unknown) => Promise<ApiPostResponse> }) {
   const [notices, setNotices] = React.useState<NoticeConfig[]>([]);
+  const [serverOptions, setServerOptions] = React.useState<ServerOption[]>([]);
   const [editing, setEditing] = React.useState<NoticeConfig | null>(null);
-  const [form, setForm] = React.useState<NoticeConfig>({ slot: 1, title: "", body: "", imagePath: "", regBegin: "", regEnd: "", platforms: "", versions: "" });
+  const [form, setForm] = React.useState<NoticeConfig>({ slot: 1, title: "", body: "", imagePath: "", typ: 0, sid: "", regBegin: "", regEnd: "", platforms: "", versions: "" });
   const [status, setStatus] = React.useState("");
   const palettes = ["blue", "green", "orange"];
 
@@ -2825,13 +2836,41 @@ function NoticePage({ postWithToken }: { postWithToken: (endpoint: string, body:
     void refresh();
   }, [refresh]);
 
+  React.useEffect(() => {
+    void fetch("/local-api/game-servers")
+      .then((response) => response.json())
+      .then((payload: { servers?: ServerOption[] }) => setServerOptions(payload.servers ?? []))
+      .catch(() => setServerOptions([]));
+  }, []);
+
   const openEditor = (notice?: NoticeConfig) => {
-    const next = notice ?? notices[0] ?? { slot: 1, title: "", body: "", imagePath: "" };
+    const next = notice ?? notices[0] ?? { slot: 1, title: "", body: "", imagePath: "", typ: 0, sid: "" };
     setEditing(next);
-    setForm({ slot: next.slot, title: next.title ?? "", body: next.body ?? "", imagePath: next.imagePath ?? "", regBegin: next.regBegin ?? "", regEnd: next.regEnd ?? "", platforms: next.platforms ?? "", versions: next.versions ?? "" });
+    setForm({ slot: next.slot, title: next.title ?? "", body: next.body ?? "", imagePath: next.imagePath ?? "", typ: next.typ ?? 0, sid: next.sid ?? "", regBegin: next.regBegin ?? "", regEnd: next.regEnd ?? "", platforms: next.platforms ?? "", versions: next.versions ?? "" });
   };
 
   const save = async () => {
+    const sidValues = toFlexibleNumberArray(form.sid);
+    if (Number(form.typ) === 1 && !sidValues.length) {
+      setStatus("公告保存失败：指定服务器未填写");
+      return;
+    }
+    if (form.regBegin && !parseDatetimeLocalSeconds(form.regBegin)) {
+      setStatus("公告保存失败：注册开始时间无效");
+      return;
+    }
+    if (form.regEnd && !parseDatetimeLocalSeconds(form.regEnd)) {
+      setStatus("公告保存失败：注册结束时间无效");
+      return;
+    }
+    if (form.platforms && !toPlatformNumberArray(form.platforms).length) {
+      setStatus("公告保存失败：平台请选择 GooglePlay 或 iOS");
+      return;
+    }
+    if (form.versions && !toVersionNumberArray(form.versions).length) {
+      setStatus("公告保存失败：版本请填写 x.x.x 或 x.x.x.x，例如 1.8.0.0");
+      return;
+    }
     const merged = [1, 2, 3].map((slot) => {
       const current = notices.find((notice) => Number(notice.slot) === slot) ?? { slot, title: "", body: "", imagePath: "" };
       return slot === form.slot ? form : current;
@@ -2862,7 +2901,13 @@ function NoticePage({ postWithToken }: { postWithToken: (endpoint: string, body:
               <div className="notice-body-box">{notice.body || "暂无公告内容"}</div>
               <label>配图路径</label>
               <div className="notice-image-path">{notice.imagePath || "未配置配图路径"}</div>
-              <div className="tag-row">{notice.platforms && <small>系统：{notice.platforms}</small>}{notice.versions && <small>版本：{notice.versions}</small>}</div>
+              <div className="tag-row">
+                <small>{Number(notice.typ) === 1 ? `服务器：${notice.sid || "未填写"}` : "范围：全部服务器"}</small>
+                {notice.regBegin && <small>注册开始：{formatBeijingTime(notice.regBegin)}</small>}
+                {notice.regEnd && <small>注册结束：{formatBeijingTime(notice.regEnd)}</small>}
+                {notice.platforms && <small>平台：{notice.platforms}</small>}
+                {notice.versions && <small>版本：{notice.versions}</small>}
+              </div>
             </button>
           );
         })}
@@ -2877,9 +2922,11 @@ function NoticePage({ postWithToken }: { postWithToken: (endpoint: string, body:
               <label>公告标题<input value={form.title} onChange={(event) => setForm({ ...form, title: event.target.value })} placeholder="请输入公告标题" /></label>
               <label>公告内容<textarea value={form.body} onChange={(event) => setForm({ ...form, body: event.target.value })} placeholder="请输入公告内容" /></label>
               <label>配图路径<input value={form.imagePath} onChange={(event) => setForm({ ...form, imagePath: event.target.value })} placeholder="例如：/notice/banner_1.png" /></label>
+              <label>公告范围<select value={form.typ ?? 0} onChange={(event) => setForm({ ...form, typ: Number(event.target.value) })}><option value={0}>全部服务器</option><option value={1}>指定服务器</option></select></label>
+              {Number(form.typ) === 1 && <label>指定服务器<input list="notice-server-options" value={form.sid ?? ""} onChange={(event) => setForm({ ...form, sid: event.target.value })} placeholder="例如 1 或 1,2" /><datalist id="notice-server-options">{serverOptions.map((server) => <option key={server.id} value={server.id}>{server.name}</option>)}</datalist></label>}
               <label>注册开始<input type="datetime-local" value={form.regBegin ?? ""} onChange={(event) => setForm({ ...form, regBegin: event.target.value })} /></label>
               <label>注册结束<input type="datetime-local" value={form.regEnd ?? ""} onChange={(event) => setForm({ ...form, regEnd: event.target.value })} /></label>
-              <label>系统筛选<input value={form.platforms ?? ""} onChange={(event) => setForm({ ...form, platforms: event.target.value })} placeholder="1=GooglePlay，2=iOS；留空全部" /></label>
+              <label>平台筛选<select value={form.platforms ?? ""} onChange={(event) => setForm({ ...form, platforms: event.target.value })}><option value="">全部平台</option><option value="1">GooglePlay</option><option value="2">iOS</option><option value="1,2">GooglePlay + iOS</option></select></label>
               <label>版本筛选<input value={form.versions ?? ""} onChange={(event) => setForm({ ...form, versions: event.target.value })} placeholder="例如 1.8.0.0；留空全部" /></label>
               <footer><button onClick={() => void save()} type="button">保存</button><button onClick={() => setEditing(null)} type="button">取消</button></footer>
             </div>
@@ -2895,11 +2942,14 @@ function noticePayloadToConfigs(data: Record<string, unknown> | null): NoticeCon
     const suffix = slot === 1 ? "" : String(slot);
     const platform = data?.[`Platform${slot}`];
     const version = data?.[`Version${slot}`];
+    const sid = data?.[`Sid${slot}`];
     return {
       slot,
       title: String(data?.[`Titel${suffix}`] ?? ""),
       body: String(data?.[`Body${suffix}`] ?? ""),
       imagePath: String(data?.[`Rs${slot}`] ?? ""),
+      typ: Number(data?.[`Typ${slot}`] ?? 0),
+      sid: Array.isArray(sid) ? sid.join(",") : "",
       regBegin: secondsToDatetimeLocal(data?.[`RegtBegin${slot}`]),
       regEnd: secondsToDatetimeLocal(data?.[`RegtEnd${slot}`]),
       platforms: Array.isArray(platform) ? platform.join(",") : "",
@@ -2916,9 +2966,12 @@ function configsToNoticePayload(configs: NoticeConfig[]) {
     payload[`Titel${suffix}`] = config.title ?? "";
     payload[`Body${suffix}`] = config.body ?? "";
     payload[`Rs${slot}`] = config.imagePath ?? "";
+    const sid = toFlexibleNumberArray(config.sid);
+    payload[`Typ${slot}`] = Number(config.typ) === 1 && sid.length ? 1 : 0;
     payload[`RegtBegin${slot}`] = config.regBegin ? parseDatetimeLocalSeconds(config.regBegin) : 0;
     payload[`RegtEnd${slot}`] = config.regEnd ? parseDatetimeLocalSeconds(config.regEnd) : 0;
-    const platforms = toFlexibleNumberArray(config.platforms);
+    payload[`Sid${slot}`] = sid.length ? sid : null;
+    const platforms = toPlatformNumberArray(config.platforms);
     const versions = toVersionNumberArray(config.versions);
     payload[`Platform${slot}`] = platforms.length ? platforms : null;
     payload[`Version${slot}`] = versions.length ? versions : null;
