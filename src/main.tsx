@@ -2171,7 +2171,7 @@ function MailListPage({ active, localMailRows, mailRows, onCreate, onDelete, onE
       {!global && <div className="mail-filter-line"><label>用户 ID：<input value={userIdQuery} onChange={(event) => setUserIdQuery(event.target.value)} /></label><button onClick={onRefresh} type="button"><Search size={14} />Search</button></div>}
       <section className="mail-table-card">
         <button className="mail-primary-button" onClick={onCreate} type="button">新建</button>
-        <MailDataTable
+        <PaginatedMailDataTable
           columns={listColumns}
           rows={rows.map((row) => {
             const id = String(row.Id ?? row.id ?? "");
@@ -2208,6 +2208,33 @@ function MailDataTable({ columns, rows }: { columns: string[]; rows: Array<Recor
       <thead><tr>{columns.map((column) => <th key={column}>{column}</th>)}</tr></thead>
       <tbody>{rows.length ? rows.map((row, index) => <tr key={index}>{columns.map((column) => <td key={column}>{row[column] ?? "暂无数据"}</td>)}</tr>) : <tr><td colSpan={columns.length}>暂无数据</td></tr>}</tbody>
     </table>
+  );
+}
+
+function PaginatedMailDataTable({ columns, pageSize = 20, rows }: { columns: string[]; pageSize?: number; rows: Array<Record<string, React.ReactNode>> }) {
+  const [page, setPage] = React.useState(1);
+  const pageCount = Math.max(1, Math.ceil(rows.length / pageSize));
+  const safePage = Math.min(page, pageCount);
+  React.useEffect(() => {
+    setPage(1);
+  }, [rows.length, pageSize]);
+  React.useEffect(() => {
+    if (page !== safePage) setPage(safePage);
+  }, [page, safePage]);
+  const start = rows.length ? (safePage - 1) * pageSize : 0;
+  const pageRows = rows.slice(start, start + pageSize);
+  const from = rows.length ? start + 1 : 0;
+  const to = Math.min(start + pageSize, rows.length);
+  return (
+    <>
+      <MailDataTable columns={columns} rows={pageRows} />
+      <div className="table-pagination">
+        <span>第 {from}-{to} 条/总共 {rows.length} 条</span>
+        <button disabled={safePage <= 1} onClick={() => setPage((current) => Math.max(1, current - 1))} type="button">‹</button>
+        <strong>{safePage}</strong>
+        <button disabled={safePage >= pageCount} onClick={() => setPage((current) => Math.min(pageCount, current + 1))} type="button">›</button>
+      </div>
+    </>
   );
 }
 
@@ -2266,6 +2293,15 @@ function formatServerIdList(value?: string) {
     .map((item) => item.trim())
     .filter(Boolean)
     .map(gameServerDisplayName)
+    .join(", ");
+}
+
+function formatPlatformList(value?: string) {
+  return String(value ?? "")
+    .split(/[\s,，;；]+/)
+    .map((item) => Number(item.trim()))
+    .filter((item) => item === 1 || item === 2)
+    .map((item) => item === 1 ? "GooglePlay" : "iOS")
     .join(", ");
 }
 
@@ -2522,15 +2558,27 @@ function RewardRows({ canUploadItemTable = true, items, onUploadItemTable, rewar
   const [uploading, setUploading] = React.useState(false);
   const [uploadError, setUploadError] = React.useState("");
   const [addCount, setAddCount] = React.useState("1");
+  const [addCountTip, setAddCountTip] = React.useState("");
   const updateReward = (index: number, patch: Partial<MailRewardItem>) => {
     setRewards(rewards.map((reward, rewardIndex) => rewardIndex === index ? { ...reward, ...patch } : reward));
   };
   const deleteReward = (index: number) => {
     setRewards(rewards.length > 1 ? rewards.filter((_, rewardIndex) => rewardIndex !== index) : [{ itemId: "", count: "0" }]);
   };
-  const addRewards = () => {
-    const count = Math.max(1, Math.min(50, Number.parseInt(addCount, 10) || 1));
+  const normalizeAddCount = () => {
+    const raw = Number.parseInt(addCount, 10);
+    if (Number.isFinite(raw) && raw > 50) {
+      setAddCount("50");
+      setAddCountTip("单次批量增加上限为50");
+      return 50;
+    }
+    const count = Math.max(1, raw || 1);
     setAddCount(String(count));
+    setAddCountTip("");
+    return count;
+  };
+  const addRewards = () => {
+    const count = normalizeAddCount();
     setRewards([...rewards, ...Array.from({ length: count }, () => ({ itemId: "", count: "0" }))]);
   };
   return (
@@ -2543,7 +2591,7 @@ function RewardRows({ canUploadItemTable = true, items, onUploadItemTable, rewar
           <button className="mail-delete-reward" onClick={() => deleteReward(index)} title="删除奖励" type="button">删除</button>
         </div>
       ))}
-      <div className="mail-form-row mail-add-reward-row"><span /><div className="mail-add-reward-control"><button className="mail-add-reward" onClick={addRewards} type="button">新增</button><input aria-label="新增奖励条目数量" inputMode="numeric" min={1} max={50} type="number" value={addCount} onChange={(event) => setAddCount(event.target.value)} /><small>条</small></div></div>
+      <div className="mail-form-row mail-add-reward-row"><span /><div className="mail-add-reward-control"><button className="mail-add-reward" onClick={addRewards} type="button">新增</button><input aria-label="新增奖励条目数量" inputMode="numeric" min={1} max={50} type="number" value={addCount} onBlur={normalizeAddCount} onChange={(event) => { setAddCount(event.target.value); setAddCountTip(""); }} /><small>条</small>{addCountTip && <em>{addCountTip}</em>}</div></div>
       {canUploadItemTable && <div className="mail-form-row"><span /><label className={`mail-upload-link ${uploading ? "disabled" : ""}`}>{uploading ? "上传中..." : "上传Item表"}<input accept=".xlsx,.xls" disabled={uploading} onChange={(event) => {
         const file = event.target.files?.[0];
         event.currentTarget.value = "";
@@ -2787,7 +2835,7 @@ function GiftSuitePage({ active, canUploadItemTable, postWithToken }: { active: 
       </div>
       <section className="gift-table-card">
         <button className="mail-primary-button" onClick={() => setView("edit")} type="button">新建</button>
-        <MailDataTable
+        <PaginatedMailDataTable
           columns={["礼包码", "模板名称", "类型", "最多可领", "已下载", "已领取", "是否启用", "生效时间", "过期时间", "操作"]}
           rows={filteredRows.map((row) => {
             const id = formatCell(row.Id);
@@ -3099,6 +3147,14 @@ function NoticePage({ postWithToken }: { postWithToken: (endpoint: string, body:
       .catch(() => setServerOptions([]));
   }, []);
 
+  React.useEffect(() => {
+    if (!editing) return undefined;
+    document.body.classList.add("modal-open");
+    return () => {
+      document.body.classList.remove("modal-open");
+    };
+  }, [editing]);
+
   const openEditor = (notice?: NoticeConfig) => {
     const next = notice ?? notices[0] ?? { slot: 1, title: "", body: "", imagePath: "", typ: 0, sid: "" };
     const drafts = [1, 2, 3].map((slot) => normalizeNotice(notices.find((item) => Number(item.slot) === slot) ?? emptyNotice(slot), slot));
@@ -3171,7 +3227,7 @@ function NoticePage({ postWithToken }: { postWithToken: (endpoint: string, body:
                 <small>{Number(notice.typ) === 1 ? `服务器：${formatServerIdList(notice.sid) || "未填写"}` : "范围：全部服务器"}</small>
                 {notice.regBegin && <small>注册开始：{formatBeijingTime(notice.regBegin)}</small>}
                 {notice.regEnd && <small>注册结束：{formatBeijingTime(notice.regEnd)}</small>}
-                {notice.platforms && <small>平台：{notice.platforms}</small>}
+                {notice.platforms && <small>平台：{formatPlatformList(notice.platforms)}</small>}
                 {notice.versions && <small>版本：{notice.versions}</small>}
               </div>
             </button>

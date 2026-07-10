@@ -16,6 +16,10 @@ body {
   min-width: 1160px;
 }
 
+body.modal-open {
+  overflow: hidden;
+}
+
 button,
 input,
 select,
@@ -1464,14 +1468,34 @@ tbody tr:hover,
   border-color: #ffb454;
 }
 
+.notice-card .tag-row {
+  gap: 5px;
+}
+
+.notice-card .tag-row small {
+  border: 1px solid currentColor;
+  border-radius: 3px;
+  padding: 3px 6px;
+  color: inherit;
+  background: rgb(255 255 255 / 42%);
+  font-size: 11px;
+  font-weight: 650;
+  line-height: 1.25;
+}
+
 .notice-modal {
+  display: flex;
+  flex-direction: column;
   width: min(680px, calc(100vw - 64px));
+  max-height: calc(100vh - 64px);
+  overflow: hidden;
   border-radius: 7px;
   background: #fff;
   box-shadow: 0 24px 80px rgb(12 20 34 / 28%);
 }
 
 .notice-modal header {
+  flex: 0 0 auto;
   display: flex;
   align-items: center;
   justify-content: space-between;
@@ -1491,6 +1515,8 @@ tbody tr:hover,
 .notice-form {
   display: grid;
   gap: 16px;
+  overflow-y: auto;
+  overscroll-behavior: contain;
   padding: 18px;
 }
 
@@ -1788,6 +1814,51 @@ tbody tr:hover,
 
 .mail-table-card {
   padding: 20px 20px 24px;
+}
+
+.table-pagination {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  min-height: 46px;
+  padding-top: 14px;
+  color: #344257;
+  font-size: 14px;
+}
+
+.table-pagination button {
+  display: inline-grid;
+  place-items: center;
+  width: 24px;
+  height: 28px;
+  border: 0;
+  color: #98a4b4;
+  background: transparent;
+  font-size: 20px;
+  line-height: 1;
+}
+
+.table-pagination button:not(:disabled) {
+  cursor: pointer;
+  color: #5d6b7e;
+}
+
+.table-pagination button:disabled {
+  cursor: not-allowed;
+  opacity: .45;
+}
+
+.table-pagination strong {
+  display: inline-grid;
+  place-items: center;
+  min-width: 28px;
+  height: 30px;
+  border: 1px solid #1d8cff;
+  border-radius: 6px;
+  color: #1d8cff;
+  background: #fff;
+  font-weight: 650;
 }
 
 .mail-primary-button {
@@ -2233,6 +2304,13 @@ tbody tr:hover,
   font-size: 13px;
 }
 
+.mail-add-reward-control em {
+  color: #ff3b38;
+  font-size: 12px;
+  font-style: normal;
+  white-space: nowrap;
+}
+
 .mail-delete-reward {
   height: 30px;
   border: 1px solid #ffd0c8;
@@ -2365,6 +2443,8 @@ tbody tr:hover,
   inset: 0;
   display: grid;
   place-items: center;
+  overflow: hidden;
+  overscroll-behavior: contain;
   background: rgb(13 18 28 / 42%);
 }
 
