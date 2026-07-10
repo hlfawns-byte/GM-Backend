@@ -1606,10 +1606,10 @@ tbody tr:hover,
 
 .gift-edit-card {
   display: grid;
-  gap: 24px;
+  gap: 18px;
   max-width: 1280px;
   min-height: 560px;
-  padding: 32px 0 42px 170px;
+  padding: 32px 0 42px 120px;
 }
 
 .gift-form-row {
@@ -1640,6 +1640,44 @@ tbody tr:hover,
   gap: 10px;
 }
 
+.gift-mode-row {
+  display: flex;
+  gap: 10px;
+}
+
+.gift-help {
+  max-width: 820px;
+  margin-left: 106px;
+  border: 1px solid #e3ebf5;
+  border-radius: 4px;
+  padding: 12px 14px;
+  color: #536276;
+  background: #f8fbff;
+  font-size: 13px;
+  line-height: 1.55;
+}
+
+.gift-help strong {
+  color: #2c3c51;
+}
+
+.gift-help p {
+  margin: 4px 0 0;
+}
+
+.gift-textarea-row {
+  align-items: start;
+}
+
+.gift-textarea-row textarea {
+  min-height: 76px;
+  border: 1px solid #d8e0eb;
+  border-radius: 4px;
+  padding: 10px 12px;
+  color: #2f3d50;
+  resize: vertical;
+}
+
 .gift-check-row input {
   width: 16px;
   height: 16px;
@@ -1653,6 +1691,11 @@ tbody tr:hover,
   display: flex;
   gap: 18px;
   padding-left: 106px;
+}
+
+.gift-form-error {
+  max-width: 820px;
+  margin-left: 106px;
 }
 
 .gift-form-actions button {

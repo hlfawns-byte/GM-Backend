@@ -2314,8 +2314,8 @@ function MailEditor({ canUploadItemTable, global, initialMail, items, onBack, on
     const regBeginValues = conditionRows.filter((row) => row.field === "regTime" && row.op === ">=" && row.value).map((row) => parseDatetimeLocalSeconds(dateToDatetimeLocal(row.value)));
     const regEndValues = conditionRows.filter((row) => row.field === "regTime" && row.op === "<=" && row.value).map((row) => parseDatetimeLocalSeconds(dateToDatetimeLocal(row.value, true)));
     const hasRegCondition = conditionRows.some((row) => row.field === "regTime" && row.value.trim());
-    const regBeginSeconds = regBeginValues.length ? Math.max(...regBeginValues) : hasRegCondition ? 0 : parseDatetimeLocalSeconds(MAIL_DEFAULT_REG_BEGIN);
-    const regEndSeconds = regEndValues.length ? Math.min(...regEndValues) : parseDatetimeLocalSeconds(defaultRegEndTime());
+    const regBeginSeconds = regBeginValues.length ? Math.max(...regBeginValues) : 0;
+    const regEndSeconds = regEndValues.length ? Math.min(...regEndValues) : hasRegCondition ? parseDatetimeLocalSeconds(defaultRegEndTime()) : 0;
     if (regBeginValues.some((value) => !value) || regEndValues.some((value) => !value)) {
       setError("请选择有效的注册时间区间");
       return;
@@ -2719,7 +2719,12 @@ function GiftSuitePage({ active, canUploadItemTable, postWithToken }: { active: 
   if (view === "edit") {
     return <GiftEditor canUploadItemTable={canUploadItemTable} items={items} onBack={() => setView("list")} onSubmit={async (body) => {
       const result = await postWithToken("/gmGiftAdd", body);
-      setStatus(result.ok ? "礼包码已保存" : `保存失败：HTTP ${result.status}`);
+      const error = apiBusinessError(result);
+      if (error) {
+        setStatus(`礼包码保存失败：${error}`);
+        throw new Error(`礼包码保存失败：${error}`);
+      }
+      setStatus("礼包码已保存");
       setView("list");
       await refreshGiftList();
     }} onUploadItemTable={uploadItemTable} />;
@@ -2771,40 +2776,93 @@ function GiftSuitePage({ active, canUploadItemTable, postWithToken }: { active: 
 function GiftEditor({ canUploadItemTable, items, onBack, onSubmit, onUploadItemTable }: { canUploadItemTable: boolean; items: ItemOption[]; onBack: () => void; onSubmit: (body: unknown) => Promise<void>; onUploadItemTable: (file: File) => Promise<void> }) {
   const now = new Date();
   const later = new Date(now.getTime() + 7 * 24 * 60 * 60 * 1000);
-  const [code, setCode] = React.useState("");
-  const [type, setType] = React.useState<"global" | "personal">("global");
+  const [giftType, setGiftType] = React.useState("1");
+  const [groupMode, setGroupMode] = React.useState<"oneToOne" | "oneToMany">("oneToMany");
+  const [groupIds, setGroupIds] = React.useState("");
+  const [codes, setCodes] = React.useState("");
   const [templateName, setTemplateName] = React.useState("");
-  const [maxCount, setMaxCount] = React.useState("0");
-  const [enabled, setEnabled] = React.useState(false);
-  const [startTime, setStartTime] = React.useState(toDatetimeLocal(now));
+  const [maxCount, setMaxCount] = React.useState("1");
   const [endTime, setEndTime] = React.useState(toDatetimeLocal(later));
   const [rewards, setRewards] = React.useState<MailRewardItem[]>([{ itemId: "", count: "0" }]);
+  const [error, setError] = React.useState("");
+  const [submitting, setSubmitting] = React.useState(false);
 
   const submit = async () => {
-    const ids = code.split(/[\n,，\s]+/).map((item) => item.trim()).filter(Boolean);
-    const itemList = rewards.flatMap((reward) => {
-      const itemId = Number(reward.itemId);
-      const count = Number(reward.count);
-      return Number.isFinite(itemId) && Number.isFinite(count) && itemId > 0 && count > 0 ? [itemId, count] : [];
-    });
-    const startSeconds = parseDatetimeLocalSeconds(startTime);
+    if (submitting) return;
+    const ids = codes.split(/[\n,，\s]+/).map((item) => item.trim()).filter(Boolean);
+    const groups = groupIds.split(/[\n,，\s]+/).map((item) => Number(item.trim())).filter((item) => Number.isFinite(item));
+    if (!groups.length) {
+      setError("请输入组ID");
+      return;
+    }
+    if (!ids.length) {
+      setError("请输入兑换码");
+      return;
+    }
+    if (groupMode === "oneToMany" && groups.length !== 1) {
+      setError("一对多模式下，组ID只能填写一个");
+      return;
+    }
+    if (groupMode === "oneToOne" && groups.length !== ids.length) {
+      setError("一对一批量模式下，组ID数量必须和兑换码数量一致");
+      return;
+    }
+    const count = Number(maxCount);
+    if (!Number.isInteger(count) || count <= 0) {
+      setError("请输入兑换码数量");
+      return;
+    }
+    const rewardValidation = validateRewardRows(rewards, items);
+    if (!rewardValidation.ok) {
+      setError(rewardValidation.message ?? "请填写有效奖励");
+      return;
+    }
+    if (!rewardValidation.itemList.length) {
+      setError("请至少添加一个奖励");
+      return;
+    }
     const endSeconds = parseDatetimeLocalSeconds(endTime);
-    if (!startSeconds || !endSeconds || endSeconds <= startSeconds) return;
-    await onSubmit({ Id: ids.length ? ids : [code], Type: type === "global" ? 1 : 0, Group: Date.now() % 100000, Num: Number(maxCount), Et: endSeconds, ItemLst: itemList, Desc: templateName, Enabled: enabled, St: startSeconds });
+    if (!endSeconds) {
+      setError("请选择到期时间");
+      return;
+    }
+    setError("");
+    setSubmitting(true);
+    try {
+      await onSubmit({
+        Id: ids,
+        Type: Number(giftType),
+        Group: groupMode === "oneToOne" && groups.length > 1 ? groups : groups[0],
+        Num: count,
+        Et: endSeconds,
+        ItemLst: rewardValidation.itemList,
+        Desc: templateName.trim(),
+      });
+    } catch (submitError) {
+      setError(submitError instanceof Error ? submitError.message : "礼包码保存失败");
+    } finally {
+      setSubmitting(false);
+    }
   };
 
   return (
     <section className="gift-edit-page">
       <div className="gift-edit-card">
-        <label className="gift-form-row"><span>礼包码</span><input value={code} onChange={(event) => setCode(event.target.value)} /><small>（字母、数字）</small></label>
-        <div className="gift-form-row gift-radio-row"><span>类型</span><RadioPill checked={type === "global"} label="global" onChange={() => setType("global")} /><RadioPill checked={type === "personal"} label="personal" onChange={() => setType("personal")} /></div>
-        <label className="gift-form-row"><span>邮件模板</span><input value={templateName} onChange={(event) => setTemplateName(event.target.value)} placeholder="请选择或填写模板名称" /></label>
-        <label className="gift-form-row"><span>总兑换数</span><input value={maxCount} onChange={(event) => setMaxCount(event.target.value)} /></label>
-        <label className="gift-form-row gift-check-row"><span>是否启用</span><input checked={enabled} onChange={(event) => setEnabled(event.target.checked)} type="checkbox" /></label>
+        <label className="gift-form-row"><span>兑换码类型</span><select value={giftType} onChange={(event) => setGiftType(event.target.value)}><option value="1">1（每个角色可兑换一次）</option><option value="0">0（普通兑换码）</option></select></label>
+        <div className="gift-form-row gift-mode-row"><span>组ID模式</span><RadioPill checked={groupMode === "oneToMany"} label="一对多" onChange={() => setGroupMode("oneToMany")} /><RadioPill checked={groupMode === "oneToOne"} label="一对一批量" onChange={() => setGroupMode("oneToOne")} /></div>
+        <div className="gift-help">
+          <strong>说明：</strong>
+          <p>一对多：一个组ID对应多个兑换码，组ID只填一个，兑换码可填多个。</p>
+          <p>一对一批量：一个组ID对应一个兑换码，组ID行数必须和兑换码行数一致。</p>
+        </div>
+        <label className="gift-form-row gift-textarea-row"><span>组ID</span><textarea value={groupIds} onChange={(event) => setGroupIds(event.target.value)} placeholder={groupMode === "oneToOne" ? "请输入组ID，每行一个，与兑换码顺序一一对应" : "请输入一个组ID"} /></label>
+        <label className="gift-form-row gift-textarea-row"><span>兑换码</span><textarea value={codes} onChange={(event) => setCodes(event.target.value)} placeholder={groupMode === "oneToOne" ? "请输入兑换码，每行一个，与组ID顺序一一对应" : "请输入兑换码，每行一个"} /></label>
+        <label className="gift-form-row"><span>数量</span><input inputMode="numeric" value={maxCount} onChange={(event) => setMaxCount(event.target.value)} placeholder="数量" /></label>
+        <label className="gift-form-row"><span>备注</span><input value={templateName} onChange={(event) => setTemplateName(event.target.value)} placeholder="请输入备注" /></label>
         <RewardRows canUploadItemTable={canUploadItemTable} items={items} onUploadItemTable={onUploadItemTable} rewards={rewards} setRewards={setRewards} />
-        <label className="gift-form-row"><span>生效时间</span><input type="datetime-local" value={startTime} onChange={(event) => setStartTime(event.target.value)} /><em>北京时间 {formatBeijingTime(startTime)}</em></label>
         <label className="gift-form-row"><span>过期时间</span><input type="datetime-local" value={endTime} onChange={(event) => setEndTime(event.target.value)} /><em>北京时间 {formatBeijingTime(endTime)}</em></label>
-        <div className="gift-form-actions"><button onClick={() => void submit()} type="button">保存</button><button onClick={onBack} type="button">取消</button></div>
+        {error && <div className="mail-form-error gift-form-error">{error}</div>}
+        <div className="gift-form-actions"><button disabled={submitting} onClick={() => void submit()} type="button">{submitting ? "保存中..." : "确定"}</button><button disabled={submitting} onClick={onBack} type="button">取消</button></div>
       </div>
     </section>
   );
