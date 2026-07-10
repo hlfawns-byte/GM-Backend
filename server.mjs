@@ -145,6 +145,12 @@ function readScheduledMails() {
   return Array.isArray(mails) ? mails : [];
 }
 
+function gameServerDisplayName(id) {
+  const number = Number(id);
+  if (!Number.isFinite(number) || number <= 0) return String(id ?? "");
+  return number <= 123 ? `GL-${number}` : `TK-${number - 123}`;
+}
+
 function writeScheduledMails(mails) {
   writeJson(files.scheduledMails, mails);
 }
@@ -374,7 +380,7 @@ async function handleLocalApi(req, res, pathname) {
 
   if (pathname === "/local-api/game-servers" && req.method === "GET") {
     const servers = Array.from({ length: 200 }, (_, index) => ({ id: index + 1, name: `游戏内区服 ${index + 1}` }));
-    sendJson(res, 200, { servers });
+    sendJson(res, 200, { servers: servers.map((server) => ({ ...server, name: gameServerDisplayName(server.id) })) });
     return true;
   }
 

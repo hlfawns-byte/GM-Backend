@@ -83,6 +83,10 @@ const rewardTemplatesFile = path.resolve(`data/${portal}/reward-templates.json`)
 const scheduledMailsFile = path.resolve(`data/${portal}/scheduled-mails.json`);
 const userLogsFile = path.resolve(`data/${portal}/user-logs.json`);
 const noticesFile = path.resolve(`data/${portal}/notices.json`);
+
+function gameServerDisplayName(id: number) {
+  return id <= 123 ? `GL-${id}` : `TK-${id - 123}`;
+}
 const gmServerTarget = "http://52.77.195.98:9089";
 const bundledPython = "C:\\Users\\Touka\\.cache\\codex-runtimes\\codex-primary-runtime\\dependencies\\python\\python.exe";
 const defaultItemTable = "D:\\Project\\Bb_Main\\Config\\Excel\\Item.xlsx";
@@ -562,7 +566,7 @@ function localAccountPlugin() {
         }
 
         if (url === "/local-api/game-servers" && req.method === "GET") {
-          const servers = Array.from({ length: 200 }, (_, index) => ({ id: index + 1, name: `游戏内区服 ${index + 1}` }));
+          const servers = Array.from({ length: 200 }, (_, index) => ({ id: index + 1, name: gameServerDisplayName(index + 1) }));
           sendJson(res, 200, { servers });
           return;
         }

@@ -464,6 +464,12 @@ function toPlatformNumberArray(value?: string) {
     .filter((item) => item === 1 || item === 2);
 }
 
+function gameServerDisplayName(id: unknown) {
+  const number = Number(id);
+  if (!Number.isFinite(number) || number <= 0) return String(id ?? "");
+  return number <= 123 ? `GL-${number}` : `TK-${number - 123}`;
+}
+
 function dateToDatetimeLocal(value: string, endOfDay = false) {
   if (!value) return "";
   if (value.includes("T")) return value;
@@ -2146,7 +2152,7 @@ function MailListPage({ active, localMailRows, mailRows, onCreate, onDelete, onE
     if (!global && !isPersonalMail) return false;
     if (!userIdQuery.trim()) return true;
     return formatCell(row.TargetID).includes(userIdQuery.trim());
-  });
+  }).sort(compareMailRowsNewestFirst);
   const listColumns = ["ID", "模板名称", "目标", "状态", "时间", "操作"];
 
   if (global && recordTab === "claim") {
@@ -2212,7 +2218,7 @@ function MailTargetSummary({ row, serverOptions }: { row: Record<string, unknown
   const isPersonalMail = typ === 3 || (!typ && targetIds.length > 0);
   const targetText = targetIds.length
     ? isServerMail
-      ? targetIds.map((targetId) => serverOptions.find((server) => server.id === Number(targetId))?.name ?? `游戏内区服 ${String(targetId)}`).join(", ")
+      ? targetIds.map((targetId) => serverOptions.find((server) => server.id === Number(targetId))?.name ?? gameServerDisplayName(targetId)).join(", ")
       : `用户 ${formatCell(row.TargetID)}`
     : isPersonalMail
       ? "未填写用户"
@@ -2229,6 +2235,38 @@ function MailTargetSummary({ row, serverOptions }: { row: Record<string, unknown
     regEnd > 0 ? { label: "注册结束", value: formatTimestamp(regEnd) } : null,
   ].filter((item): item is { label: string; value: string } => Boolean(item));
   return <span className="mail-target-summary">{tags.map((item) => <span key={item.label}><em>{item.label}</em>{item.value}</span>)}</span>;
+}
+
+function mailRowCreateSeconds(row: Record<string, unknown>) {
+  return parseTimeSeconds(row.CreateTime ?? row.CreatedAt ?? row.Ct ?? row.createdAt ?? row.CreateAt);
+}
+
+function mailRowIdBigInt(row: Record<string, unknown>) {
+  const raw = String(row.Id ?? row.id ?? "").replace(/\D/g, "");
+  if (!raw) return 0n;
+  try {
+    return BigInt(raw);
+  } catch {
+    return 0n;
+  }
+}
+
+function compareMailRowsNewestFirst(a: Record<string, unknown>, b: Record<string, unknown>) {
+  const timeDiff = mailRowCreateSeconds(b) - mailRowCreateSeconds(a);
+  if (timeDiff !== 0) return timeDiff;
+  const idA = mailRowIdBigInt(a);
+  const idB = mailRowIdBigInt(b);
+  if (idA === idB) return 0;
+  return idB > idA ? 1 : -1;
+}
+
+function formatServerIdList(value?: string) {
+  return String(value ?? "")
+    .split(/[\s,，;；]+/)
+    .map((item) => item.trim())
+    .filter(Boolean)
+    .map(gameServerDisplayName)
+    .join(", ");
 }
 
 function MailEditor({ canUploadItemTable, global, initialMail, items, onBack, onSubmit, onUploadItemTable, rewardTemplates, serverOptions, templates }: { canUploadItemTable: boolean; global: boolean; initialMail?: Record<string, unknown>; items: ItemOption[]; onBack: () => void; onSubmit: (body: unknown) => Promise<string | void>; onUploadItemTable: (file: File) => Promise<void>; rewardTemplates: RewardTemplate[]; serverOptions: ServerOption[]; templates: MailTemplate[] }) {
@@ -3022,8 +3060,22 @@ function NoticePage({ postWithToken }: { postWithToken: (endpoint: string, body:
   const [serverOptions, setServerOptions] = React.useState<ServerOption[]>([]);
   const [editing, setEditing] = React.useState<NoticeConfig | null>(null);
   const [form, setForm] = React.useState<NoticeConfig>({ slot: 1, title: "", body: "", imagePath: "", typ: 0, sid: "", regBegin: "", regEnd: "", platforms: "", versions: "" });
+  const [noticeDrafts, setNoticeDrafts] = React.useState<NoticeConfig[]>([]);
   const [status, setStatus] = React.useState("");
   const palettes = ["blue", "green", "orange"];
+  const emptyNotice = (slot: number): NoticeConfig => ({ slot, title: "", body: "", imagePath: "", typ: 0, sid: "", regBegin: "", regEnd: "", platforms: "", versions: "" });
+  const normalizeNotice = (notice: Partial<NoticeConfig>, slot = Number(notice.slot) || 1): NoticeConfig => ({
+    slot,
+    title: notice.title ?? "",
+    body: notice.body ?? "",
+    imagePath: notice.imagePath ?? "",
+    typ: notice.typ ?? 0,
+    sid: notice.sid ?? "",
+    regBegin: notice.regBegin ?? "",
+    regEnd: notice.regEnd ?? "",
+    platforms: notice.platforms ?? "",
+    versions: notice.versions ?? "",
+  });
 
   const refresh = React.useCallback(async () => {
     const result = await postWithToken("/gmNoticeLst", {});
@@ -3049,8 +3101,21 @@ function NoticePage({ postWithToken }: { postWithToken: (endpoint: string, body:
 
   const openEditor = (notice?: NoticeConfig) => {
     const next = notice ?? notices[0] ?? { slot: 1, title: "", body: "", imagePath: "", typ: 0, sid: "" };
+    const drafts = [1, 2, 3].map((slot) => normalizeNotice(notices.find((item) => Number(item.slot) === slot) ?? emptyNotice(slot), slot));
+    setNoticeDrafts(drafts);
     setEditing(next);
-    setForm({ slot: next.slot, title: next.title ?? "", body: next.body ?? "", imagePath: next.imagePath ?? "", typ: next.typ ?? 0, sid: next.sid ?? "", regBegin: next.regBegin ?? "", regEnd: next.regEnd ?? "", platforms: next.platforms ?? "", versions: next.versions ?? "" });
+    setForm(normalizeNotice(next, Number(next.slot) || 1));
+  };
+
+  const switchNoticeSlot = (slot: number) => {
+    const currentSlot = Number(form.slot) || 1;
+    const nextDrafts = [1, 2, 3].map((itemSlot) => {
+      if (itemSlot === currentSlot) return normalizeNotice(form, currentSlot);
+      return normalizeNotice(noticeDrafts.find((notice) => Number(notice.slot) === itemSlot) ?? notices.find((notice) => Number(notice.slot) === itemSlot) ?? emptyNotice(itemSlot), itemSlot);
+    });
+    const nextForm = nextDrafts.find((notice) => Number(notice.slot) === slot) ?? emptyNotice(slot);
+    setNoticeDrafts(nextDrafts);
+    setForm(normalizeNotice(nextForm, slot));
   };
 
   const save = async () => {
@@ -3075,10 +3140,7 @@ function NoticePage({ postWithToken }: { postWithToken: (endpoint: string, body:
       setStatus("公告保存失败：版本请填写 x.x.x 或 x.x.x.x，例如 1.8.0.0");
       return;
     }
-    const merged = [1, 2, 3].map((slot) => {
-      const current = notices.find((notice) => Number(notice.slot) === slot) ?? { slot, title: "", body: "", imagePath: "" };
-      return slot === form.slot ? form : current;
-    });
+    const merged = [1, 2, 3].map((slot) => normalizeNotice(slot === form.slot ? form : noticeDrafts.find((notice) => Number(notice.slot) === slot) ?? notices.find((notice) => Number(notice.slot) === slot) ?? emptyNotice(slot), slot));
     const result = await postWithToken("/gmNoticeAdd", configsToNoticePayload(merged));
     const error = apiBusinessError(result);
     if (error) {
@@ -3106,7 +3168,7 @@ function NoticePage({ postWithToken }: { postWithToken: (endpoint: string, body:
               <label>配图路径</label>
               <div className="notice-image-path">{notice.imagePath || "未配置配图路径"}</div>
               <div className="tag-row">
-                <small>{Number(notice.typ) === 1 ? `服务器：${notice.sid || "未填写"}` : "范围：全部服务器"}</small>
+                <small>{Number(notice.typ) === 1 ? `服务器：${formatServerIdList(notice.sid) || "未填写"}` : "范围：全部服务器"}</small>
                 {notice.regBegin && <small>注册开始：{formatBeijingTime(notice.regBegin)}</small>}
                 {notice.regEnd && <small>注册结束：{formatBeijingTime(notice.regEnd)}</small>}
                 {notice.platforms && <small>平台：{notice.platforms}</small>}
@@ -3122,7 +3184,7 @@ function NoticePage({ postWithToken }: { postWithToken: (endpoint: string, body:
           <section className="notice-modal" role="dialog" aria-modal="true">
             <header><strong>添加/修改公告</strong><button onClick={() => setEditing(null)} type="button">x</button></header>
             <div className="notice-form">
-              <label>公告位置<select value={form.slot} onChange={(event) => setForm({ ...form, slot: Number(event.target.value) })}><option value={1}>公告 1</option><option value={2}>公告 2</option><option value={3}>公告 3</option></select></label>
+              <label>公告位置<select value={form.slot} onChange={(event) => switchNoticeSlot(Number(event.target.value))}><option value={1}>公告 1</option><option value={2}>公告 2</option><option value={3}>公告 3</option></select></label>
               <label>公告标题<input value={form.title} onChange={(event) => setForm({ ...form, title: event.target.value })} placeholder="请输入公告标题" /></label>
               <label>公告内容<textarea value={form.body} onChange={(event) => setForm({ ...form, body: event.target.value })} placeholder="请输入公告内容" /></label>
               <label>配图路径<input value={form.imagePath} onChange={(event) => setForm({ ...form, imagePath: event.target.value })} placeholder="例如：/notice/banner_1.png" /></label>
