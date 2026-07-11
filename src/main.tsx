@@ -2019,12 +2019,22 @@ function MailSuitePage({ active, canUploadItemTable, postWithToken, session, set
             .map((row) => ({ field: String(row.field ?? ""), op: String(row.op ?? "="), value: String(row.value ?? "") }));
           const serverBody: Record<string, unknown> = { ...submitted };
           delete serverBody.__conditionRows;
-          if (Number(serverBody.Typ) === 3 && conditionRows.some((row) => row.value.trim())) {
+          const isPersonalMailSubmit = Number(serverBody.Typ) === 3;
+          if (isPersonalMailSubmit) {
             const targets = getArray(serverBody.TargetID).map((item) => Number(item)).filter((item) => Number.isFinite(item));
             const infoResult = await postWithToken("/gmPlayerInfo", { Typ: 1, UserId: targets });
             const infoError = apiBusinessError(infoResult);
-            if (infoError) throw new Error(`个人邮件条件校验失败：${infoError}`);
+            if (infoError) throw new Error("用户id不存在");
             const playerMap = extractPlayerInfoMap(infoResult.payload, targets);
+            if (targets.some((targetId) => !playerMap.has(targetId))) {
+              throw new Error("用户id不存在");
+            }
+            if (!conditionRows.some((row) => row.value.trim())) {
+              serverBody.RegtBegin = 0;
+              serverBody.Regt = 0;
+              serverBody.Platform = [];
+              serverBody.Version = [];
+            } else {
             const matchedTargets = targets.filter((targetId) => {
               const player = playerMap.get(targetId);
               return player ? playerMatchesMailConditions(player, conditionRows) : false;
@@ -2041,6 +2051,7 @@ function MailSuitePage({ active, canUploadItemTable, postWithToken, session, set
             serverBody.Regt = parseDatetimeLocalSeconds(defaultRegEndTime());
             serverBody.Platform = [];
             serverBody.Version = [];
+            }
           }
           const startSeconds = Number(submitted.St);
           const isScheduled = Number.isFinite(startSeconds) && startSeconds > Math.floor(Date.now() / 1000) + 5;
@@ -2070,7 +2081,8 @@ function MailSuitePage({ active, canUploadItemTable, postWithToken, session, set
           const result = await postWithToken("/gmMailAdd", serverBody);
           const error = apiBusinessError(result);
           if (error) {
-            throw new Error(`邮件提交失败：${error}`);
+            const message = isPersonalMailSubmit && /条件参数|用户ID|用户不存在|TargetID/i.test(error) ? "用户id不存在" : error;
+            throw new Error(`邮件提交失败：${message}`);
           }
           const data = getApiData(result.payload);
           const localRow = {
@@ -3208,6 +3220,20 @@ function NoticePage({ postWithToken }: { postWithToken: (endpoint: string, body:
     await refresh();
   };
 
+  const deleteNotice = async (slot: number) => {
+    if (!window.confirm(`确认删除公告 ${slot}？`)) return;
+    const merged = [1, 2, 3].map((itemSlot) => normalizeNotice(itemSlot === slot ? emptyNotice(itemSlot) : notices.find((notice) => Number(notice.slot) === itemSlot) ?? emptyNotice(itemSlot), itemSlot));
+    const result = await postWithToken("/gmNoticeAdd", configsToNoticePayload(merged));
+    const error = apiBusinessError(result);
+    if (error) {
+      setStatus(`公告删除失败：${error}`);
+      return;
+    }
+    setStatus(`公告 ${slot} 已删除`);
+    if (Number(editing?.slot) === slot) setEditing(null);
+    await refresh();
+  };
+
   return (
     <section className="notice-page">
       <h2>公告</h2>
@@ -3216,21 +3242,24 @@ function NoticePage({ postWithToken }: { postWithToken: (endpoint: string, body:
         {[1, 2, 3].map((slot, index) => {
           const notice = notices.find((item) => Number(item.slot) === slot) ?? { slot, title: "", body: "", imagePath: "" };
           return (
-            <button className={`notice-card ${palettes[index]}`} key={slot} onClick={() => openEditor(notice)} type="button">
-              <span className="notice-watermark">admin</span>
-              <strong>公告 {slot}</strong>
-              <h3>{notice.title || "未配置公告标题"}</h3>
-              <div className="notice-body-box">{notice.body || "暂无公告内容"}</div>
-              <label>配图路径</label>
-              <div className="notice-image-path">{notice.imagePath || "未配置配图路径"}</div>
-              <div className="tag-row">
-                <small>{Number(notice.typ) === 1 ? `服务器：${formatServerIdList(notice.sid) || "未填写"}` : "范围：全部服务器"}</small>
-                {notice.regBegin && <small>注册开始：{formatBeijingTime(notice.regBegin)}</small>}
-                {notice.regEnd && <small>注册结束：{formatBeijingTime(notice.regEnd)}</small>}
-                {notice.platforms && <small>平台：{formatPlatformList(notice.platforms)}</small>}
-                {notice.versions && <small>版本：{notice.versions}</small>}
-              </div>
-            </button>
+            <article className={`notice-card ${palettes[index]}`} key={slot}>
+              <button className="notice-delete-button" onClick={(event) => { event.stopPropagation(); void deleteNotice(slot); }} title={`删除公告 ${slot}`} type="button"><Trash2 size={14} />删除</button>
+              <button className="notice-card-content" onClick={() => openEditor(notice)} type="button">
+                <span className="notice-watermark">admin</span>
+                <strong>公告 {slot}</strong>
+                <h3>{notice.title || "未配置公告标题"}</h3>
+                <div className="notice-body-box">{notice.body || "暂无公告内容"}</div>
+                <label>配图路径</label>
+                <div className="notice-image-path">{notice.imagePath || "未配置配图路径"}</div>
+                <div className="tag-row">
+                  <small>{Number(notice.typ) === 1 ? `服务器：${formatServerIdList(notice.sid) || "未填写"}` : "范围：全部服务器"}</small>
+                  {notice.regBegin && <small>注册开始：{formatBeijingTime(notice.regBegin)}</small>}
+                  {notice.regEnd && <small>注册结束：{formatBeijingTime(notice.regEnd)}</small>}
+                  {notice.platforms && <small>平台：{formatPlatformList(notice.platforms)}</small>}
+                  {notice.versions && <small>版本：{notice.versions}</small>}
+                </div>
+              </button>
+            </article>
           );
         })}
       </div>
