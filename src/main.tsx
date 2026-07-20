@@ -189,8 +189,10 @@ type UserLog = {
 
 type NoticeConfig = {
   slot: number;
+  templateName?: string;
   title: string;
   body: string;
+  contents?: Record<string, MailTemplateContent>;
   imagePath: string;
   typ?: number;
   sid?: string;
@@ -248,7 +250,20 @@ function defaultRegEndTime() {
   return toDatetimeLocal(new Date());
 }
 
-const mailLanguages = ["中文(简体)", "中文(繁体)", "英文", "韩文", "日文", "德语", "法语", "西班牙语", "葡萄牙语", "俄语", "意大利语", "印尼语", "泰语", "越南语"];
+const languageDefinitions = [
+  { id: 1, label: "简体中文", code: "ChineseSimplified", aliases: ["中文(简体)", "简体中文", "ChineseSimplified"] },
+  { id: 2, label: "繁体中文", code: "ChineseTraditional", aliases: ["中文(繁体)", "繁体中文", "ChineseTraditional"] },
+  { id: 3, label: "英语", code: "English", aliases: ["英文", "英语", "English"] },
+  { id: 4, label: "日语", code: "Japanese", aliases: ["日文", "日语", "Japanese"] },
+  { id: 5, label: "韩语", code: "Korean", aliases: ["韩文", "韩语", "Korean"] },
+  { id: 6, label: "俄语", code: "Russian", aliases: ["俄语", "Russian"] },
+  { id: 7, label: "越南语", code: "Vietnamese", aliases: ["越南语", "Vietnamese"] },
+  { id: 8, label: "德语", code: "German", aliases: ["德语", "German"] },
+  { id: 9, label: "葡萄牙语", code: "Portuguese", aliases: ["葡萄牙语", "Portuguese", "葡语"] },
+  { id: 10, label: "西班牙语", code: "Spanish", aliases: ["西班牙语", "Spanish"] },
+  { id: 11, label: "法语", code: "French", aliases: ["法语", "French"] },
+];
+const mailLanguages = languageDefinitions.map((language) => language.label);
 const defaultMailLanguage = mailLanguages[0];
 
 const portal = import.meta.env.VITE_GM_PORTAL === "prod" ? "prod" : "test";
@@ -477,12 +492,57 @@ function dateToDatetimeLocal(value: string, endOfDay = false) {
 }
 
 function templatePrimaryContent(template: MailTemplate) {
-  const contents = template.contents ?? {};
+  const contents = normalizeLanguageContents(template.contents, { title: template.title, body: template.body });
   return contents[defaultMailLanguage] ?? Object.values(contents).find((content) => content.title?.trim() || content.body?.trim()) ?? { title: template.title, body: template.body };
 }
 
 function stringFromCell(value: unknown) {
   return String(value ?? "").trim();
+}
+
+function matchLanguage(value: unknown) {
+  const text = stringFromCell(value).toLowerCase();
+  if (!text) return undefined;
+  return languageDefinitions.find((language) => String(language.id) === text || language.label.toLowerCase() === text || language.code.toLowerCase() === text || language.aliases.some((alias) => alias.toLowerCase() === text));
+}
+
+function emptyLanguageContents() {
+  return Object.fromEntries(mailLanguages.map((language) => [language, { title: "", body: "" }])) as Record<string, MailTemplateContent>;
+}
+
+function normalizeLanguageContents(contents?: Record<string, MailTemplateContent>, fallback?: MailTemplateContent) {
+  const normalized = emptyLanguageContents();
+  for (const language of languageDefinitions) {
+    const sourceKey = [language.label, language.code, ...language.aliases].find((key) => contents?.[key]);
+    if (sourceKey && contents?.[sourceKey]) {
+      normalized[language.label] = { title: contents[sourceKey].title ?? "", body: contents[sourceKey].body ?? "" };
+    }
+  }
+  if (fallback && !normalized[defaultMailLanguage].title && !normalized[defaultMailLanguage].body) {
+    normalized[defaultMailLanguage] = { title: fallback.title ?? "", body: fallback.body ?? "" };
+  }
+  return normalized;
+}
+
+function languageContentList(contents?: Record<string, MailTemplateContent>) {
+  const normalized = normalizeLanguageContents(contents);
+  return languageDefinitions.map((language) => ({
+    id: language.id,
+    language: language.label,
+    code: language.code,
+    title: normalized[language.label]?.title ?? "",
+    body: normalized[language.label]?.body ?? "",
+  }));
+}
+
+function multiLanguagePayload(contents?: Record<string, MailTemplateContent>) {
+  const languages = languageContentList(contents);
+  return {
+    type: "multiLanguage",
+    defaultLanguageId: 1,
+    languages,
+    contents: Object.fromEntries(languages.map((language) => [language.language, { title: language.title, body: language.body }])),
+  };
 }
 
 async function parseMailTemplateFile(file: File) {
@@ -506,7 +566,7 @@ async function parseMailTemplateFile(file: File) {
   const contents = Object.fromEntries(mailLanguages.map((language) => [language, { title: "", body: "" }])) as Record<string, MailTemplateContent>;
   if (languageColumn >= 0) {
     for (const item of dataRows) {
-      const language = mailLanguages.find((candidate) => candidate === stringFromCell(item[languageColumn]));
+      const language = matchLanguage(item[languageColumn])?.label;
       if (!language) continue;
       contents[language] = { title: stringFromCell(item[titleColumn]), body: stringFromCell(item[bodyColumn]) };
     }
@@ -2343,7 +2403,7 @@ function MailEditor({ canUploadItemTable, global, initialMail, items, onBack, on
   const [submitting, setSubmitting] = React.useState(false);
   const isGlobalMail = mailType === "global";
   const defaultFilterValue = (field: string, op = "=") => {
-    if (field === "regTime") return (op === "<=" ? defaultRegEndTime() : MAIL_DEFAULT_REG_BEGIN).slice(0, 10);
+    if (field === "regTime") return op === "<=" ? defaultRegEndTime() : MAIL_DEFAULT_REG_BEGIN;
     return "";
   };
   const filterFieldOptions = [
@@ -2473,7 +2533,7 @@ function MailEditor({ canUploadItemTable, global, initialMail, items, onBack, on
         Titel: title,
         Body: body,
         BodyData: [],
-        BodyData2: selectedTemplateContents ? [JSON.stringify({ type: "multiLanguage", contents: selectedTemplateContents })] : [],
+        BodyData2: selectedTemplateContents ? [JSON.stringify(multiLanguagePayload(selectedTemplateContents))] : [],
         ItemLst: rewardValidation.itemList,
         Platform: platformList,
         Version: versionList,
@@ -2533,7 +2593,7 @@ function MailEditor({ canUploadItemTable, global, initialMail, items, onBack, on
                         <option value="2">iOS</option>
                       </select>
                     ) : row.field === "regTime" ? (
-                      <input type="date" value={row.value ? row.value.slice(0, 10) : ""} onChange={(event) => setFilterRows((current) => current.map((item) => item.id === row.id ? { ...item, value: event.target.value } : item))} />
+                      <input type="datetime-local" value={dateToDatetimeLocal(row.value, row.op === "<=")} onChange={(event) => setFilterRows((current) => current.map((item) => item.id === row.id ? { ...item, value: event.target.value } : item))} />
                     ) : row.field === "server" && serverOptions.length ? (
                       <select value={row.value} onChange={(event) => setFilterRows((current) => current.map((item) => item.id === row.id ? { ...item, value: event.target.value } : item))}>
                         <option value="">请选择游戏内区服</option>
@@ -2668,14 +2728,7 @@ function MailTemplateEditor({ onBack, onSaved, template }: { onBack: () => void;
   const [saving, setSaving] = React.useState(false);
   const [activeLanguage, setActiveLanguage] = React.useState(defaultMailLanguage);
   const [contents, setContents] = React.useState<Record<string, MailTemplateContent>>(() => {
-    const initial = Object.fromEntries(mailLanguages.map((language) => [language, { title: "", body: "" }])) as Record<string, MailTemplateContent>;
-    if (template?.contents) {
-      for (const language of mailLanguages) initial[language] = { title: template.contents[language]?.title ?? "", body: template.contents[language]?.body ?? "" };
-    }
-    if (!initial[defaultMailLanguage].title && !initial[defaultMailLanguage].body && template) {
-      initial[defaultMailLanguage] = { title: template.title ?? "", body: template.body ?? "" };
-    }
-    return initial;
+    return normalizeLanguageContents(template?.contents, template ? { title: template.title ?? "", body: template.body ?? "" } : undefined);
   });
   const activeContent = contents[activeLanguage] ?? { title: "", body: "" };
   const updateContent = (patch: Partial<MailTemplateContent>) => {
@@ -2742,7 +2795,7 @@ function MailTemplateEditor({ onBack, onSaved, template }: { onBack: () => void;
       <div className="mail-edit-card">
         <header>邮件模板</header>
         <div className="mail-template-name"><label>模板名称<input maxLength={MAX_TEMPLATE_NAME_LENGTH} value={name} onChange={(event) => setName(event.target.value)} placeholder="请输入模板名称" /></label><small>{name.length}/{MAX_TEMPLATE_NAME_LENGTH}</small></div>
-        <div className="mail-language-tabs">{mailLanguages.map((language) => <button className={activeLanguage === language ? "active" : ""} key={language} onClick={() => setActiveLanguage(language)} type="button">{language}</button>)}</div>
+        <div className="mail-language-tabs">{languageDefinitions.map((language) => <button className={activeLanguage === language.label ? "active" : ""} key={language.id} onClick={() => setActiveLanguage(language.label)} type="button"><small>{language.id}</small>{language.label}</button>)}</div>
         <div className="mail-form mail-template-form">
           <label className="mail-form-row"><span>邮件标题</span><input value={activeContent.title} onChange={(event) => updateContent({ title: event.target.value })} placeholder={`请输入${activeLanguage}邮件标题`} /></label>
           <label className="mail-form-row mail-template-body"><span>邮件内容</span><textarea value={activeContent.body} onChange={(event) => updateContent({ body: event.target.value })} placeholder={`请输入${activeLanguage}邮件内容`} /></label>
@@ -3119,15 +3172,18 @@ function NoticePage({ postWithToken }: { postWithToken: (endpoint: string, body:
   const [notices, setNotices] = React.useState<NoticeConfig[]>([]);
   const [serverOptions, setServerOptions] = React.useState<ServerOption[]>([]);
   const [editing, setEditing] = React.useState<NoticeConfig | null>(null);
-  const [form, setForm] = React.useState<NoticeConfig>({ slot: 1, title: "", body: "", imagePath: "", typ: 0, sid: "", regBegin: "", regEnd: "", platforms: "", versions: "" });
+  const [form, setForm] = React.useState<NoticeConfig>({ slot: 1, templateName: "", title: "", body: "", contents: emptyLanguageContents(), imagePath: "", typ: 0, sid: "", regBegin: "", regEnd: "", platforms: "", versions: "" });
   const [noticeDrafts, setNoticeDrafts] = React.useState<NoticeConfig[]>([]);
+  const [activeNoticeLanguage, setActiveNoticeLanguage] = React.useState(defaultMailLanguage);
   const [status, setStatus] = React.useState("");
   const palettes = ["blue", "green", "orange"];
-  const emptyNotice = (slot: number): NoticeConfig => ({ slot, title: "", body: "", imagePath: "", typ: 0, sid: "", regBegin: "", regEnd: "", platforms: "", versions: "" });
+  const emptyNotice = (slot: number): NoticeConfig => ({ slot, templateName: "", title: "", body: "", contents: emptyLanguageContents(), imagePath: "", typ: 0, sid: "", regBegin: "", regEnd: "", platforms: "", versions: "" });
   const normalizeNotice = (notice: Partial<NoticeConfig>, slot = Number(notice.slot) || 1): NoticeConfig => ({
     slot,
+    templateName: notice.templateName ?? "",
     title: notice.title ?? "",
     body: notice.body ?? "",
+    contents: normalizeLanguageContents(notice.contents, { title: notice.title ?? "", body: notice.body ?? "" }),
     imagePath: notice.imagePath ?? "",
     typ: notice.typ ?? 0,
     sid: notice.sid ?? "",
@@ -3187,6 +3243,16 @@ function NoticePage({ postWithToken }: { postWithToken: (endpoint: string, body:
   };
 
   const save = async () => {
+    const normalizedContents = normalizeLanguageContents(form.contents, { title: form.title, body: form.body });
+    const primaryNoticeContent = normalizedContents[defaultMailLanguage].title && normalizedContents[defaultMailLanguage].body ? normalizedContents[defaultMailLanguage] : Object.values(normalizedContents).find((content) => content.title && content.body) ?? { title: "", body: "" };
+    const incompleteLanguage = mailLanguages.find((language) => {
+      const content = normalizedContents[language];
+      return Boolean(content.title.trim()) !== Boolean(content.body.trim());
+    });
+    if (incompleteLanguage) {
+      setStatus(`公告保存失败：${incompleteLanguage} 的公告标题和公告内容需要同时填写`);
+      return;
+    }
     const sidValues = toFlexibleNumberArray(form.sid);
     if (Number(form.typ) === 1 && !sidValues.length) {
       setStatus("公告保存失败：指定服务器未填写");
@@ -3208,7 +3274,8 @@ function NoticePage({ postWithToken }: { postWithToken: (endpoint: string, body:
       setStatus("公告保存失败：版本请填写 x.x.x 或 x.x.x.x，例如 1.8.0.0");
       return;
     }
-    const merged = [1, 2, 3].map((slot) => normalizeNotice(slot === form.slot ? form : noticeDrafts.find((notice) => Number(notice.slot) === slot) ?? notices.find((notice) => Number(notice.slot) === slot) ?? emptyNotice(slot), slot));
+    const normalizedForm = normalizeNotice({ ...form, title: primaryNoticeContent.title, body: primaryNoticeContent.body, contents: normalizedContents }, Number(form.slot) || 1);
+    const merged = [1, 2, 3].map((slot) => normalizeNotice(slot === normalizedForm.slot ? normalizedForm : noticeDrafts.find((notice) => Number(notice.slot) === slot) ?? notices.find((notice) => Number(notice.slot) === slot) ?? emptyNotice(slot), slot));
     const result = await postWithToken("/gmNoticeAdd", configsToNoticePayload(merged));
     const error = apiBusinessError(result);
     if (error) {
@@ -3218,6 +3285,14 @@ function NoticePage({ postWithToken }: { postWithToken: (endpoint: string, body:
     setStatus("公告已保存到服务器");
     setEditing(null);
     await refresh();
+  };
+
+  const noticeContents = normalizeLanguageContents(form.contents, { title: form.title, body: form.body });
+  const activeNoticeContent = noticeContents[activeNoticeLanguage] ?? { title: "", body: "" };
+  const updateNoticeContent = (patch: Partial<MailTemplateContent>) => {
+    const nextContents = { ...noticeContents, [activeNoticeLanguage]: { ...activeNoticeContent, ...patch } };
+    const primary = nextContents[defaultMailLanguage] ?? Object.values(nextContents).find((content) => content.title || content.body) ?? { title: "", body: "" };
+    setForm({ ...form, title: primary.title, body: primary.body, contents: nextContents });
   };
 
   const deleteNotice = async (slot: number) => {
@@ -3247,8 +3322,8 @@ function NoticePage({ postWithToken }: { postWithToken: (endpoint: string, body:
               <button className="notice-card-content" onClick={() => openEditor(notice)} type="button">
                 <span className="notice-watermark">admin</span>
                 <strong>公告 {slot}</strong>
-                <h3>{notice.title || "未配置公告标题"}</h3>
-                <div className="notice-body-box">{notice.body || "暂无公告内容"}</div>
+                <h3>{notice.templateName || notice.title || "未配置公告模板"}</h3>
+                <div className="notice-body-box">{notice.title || "暂无公告标题"}</div>
                 <label>配图路径</label>
                 <div className="notice-image-path">{notice.imagePath || "未配置配图路径"}</div>
                 <div className="tag-row">
@@ -3270,8 +3345,10 @@ function NoticePage({ postWithToken }: { postWithToken: (endpoint: string, body:
             <header><strong>添加/修改公告</strong><button onClick={() => setEditing(null)} type="button">x</button></header>
             <div className="notice-form">
               <label>公告位置<select value={form.slot} onChange={(event) => switchNoticeSlot(Number(event.target.value))}><option value={1}>公告 1</option><option value={2}>公告 2</option><option value={3}>公告 3</option></select></label>
-              <label>公告标题<input value={form.title} onChange={(event) => setForm({ ...form, title: event.target.value })} placeholder="请输入公告标题" /></label>
-              <label>公告内容<textarea value={form.body} onChange={(event) => setForm({ ...form, body: event.target.value })} placeholder="请输入公告内容" /></label>
+              <label>公告模板名<input value={form.templateName ?? ""} onChange={(event) => setForm({ ...form, templateName: event.target.value })} placeholder="请输入公告模板名" /></label>
+              <div className="notice-language-tabs">{languageDefinitions.map((language) => <button className={activeNoticeLanguage === language.label ? "active" : ""} key={language.id} onClick={() => setActiveNoticeLanguage(language.label)} type="button"><small>{language.id}</small>{language.label}</button>)}</div>
+              <label>公告标题<input value={activeNoticeContent.title} onChange={(event) => updateNoticeContent({ title: event.target.value })} placeholder={`请输入${activeNoticeLanguage}公告标题`} /></label>
+              <label>公告内容<textarea value={activeNoticeContent.body} onChange={(event) => updateNoticeContent({ body: event.target.value })} placeholder={`请输入${activeNoticeLanguage}公告内容`} /></label>
               <label>配图路径<input value={form.imagePath} onChange={(event) => setForm({ ...form, imagePath: event.target.value })} placeholder="例如：/notice/banner_1.png" /></label>
               <label>公告范围<select value={form.typ ?? 0} onChange={(event) => setForm({ ...form, typ: Number(event.target.value) })}><option value={0}>全部服务器</option><option value={1}>指定服务器</option></select></label>
               {Number(form.typ) === 1 && <label>指定服务器<input list="notice-server-options" value={form.sid ?? ""} onChange={(event) => setForm({ ...form, sid: event.target.value })} placeholder="例如 1 或 1,2" /><datalist id="notice-server-options">{serverOptions.map((server) => <option key={server.id} value={server.id}>{server.name}</option>)}</datalist></label>}
@@ -3294,10 +3371,15 @@ function noticePayloadToConfigs(data: Record<string, unknown> | null): NoticeCon
     const platform = data?.[`Platform${slot}`];
     const version = data?.[`Version${slot}`];
     const sid = data?.[`Sid${slot}`];
+    const title = String(data?.[`Titel${suffix}`] ?? "");
+    const body = String(data?.[`Body${suffix}`] ?? "");
+    const contents = parseNoticeLanguageContents(data, slot, { title, body });
     return {
       slot,
-      title: String(data?.[`Titel${suffix}`] ?? ""),
-      body: String(data?.[`Body${suffix}`] ?? ""),
+      templateName: String(data?.[`TemplateName${slot}`] ?? data?.[`NoticeTemplate${slot}`] ?? ""),
+      title,
+      body,
+      contents,
       imagePath: String(data?.[`Rs${slot}`] ?? ""),
       typ: Number(data?.[`Typ${slot}`] ?? 0),
       sid: Array.isArray(sid) ? sid.join(",") : "",
@@ -3309,13 +3391,54 @@ function noticePayloadToConfigs(data: Record<string, unknown> | null): NoticeCon
   });
 }
 
+function parseNoticeLanguageContents(data: Record<string, unknown> | null, slot: number, fallback: MailTemplateContent) {
+  const normalized = normalizeLanguageContents(undefined, fallback);
+  const rawLanguageData = data?.[`Lang${slot}`] ?? data?.[`Languages${slot}`] ?? data?.[`Language${slot}`];
+  const rawBodyData = data?.[`BodyData${slot}`];
+  const titleList = getArray(data?.[`TitelLst${slot}`] ?? data?.[`TitleLst${slot}`]);
+  const bodyList = getArray(data?.[`BodyLst${slot}`]);
+  const applyRows = (rows: unknown[]) => {
+    for (const row of rows) {
+      const item = getObject(row);
+      if (!item) continue;
+      const language = languageDefinitions.find((candidate) => Number(item.id ?? item.Id ?? item.LanguageId ?? item.languageId) === candidate.id) ?? matchLanguage(item.language ?? item.Language ?? item.code ?? item.Code);
+      if (!language) continue;
+      normalized[language.label] = { title: String(item.title ?? item.Title ?? item.Titel ?? ""), body: String(item.body ?? item.Body ?? "") };
+    }
+  };
+  if (Array.isArray(rawLanguageData)) applyRows(rawLanguageData);
+  if (Array.isArray(rawBodyData)) {
+    for (const value of rawBodyData) {
+      const parsed = typeof value === "string" ? parseJson(value) : value;
+      const payload = getObject(parsed);
+      const rows = getArray(payload?.languages ?? payload?.Languages);
+      if (rows.length) applyRows(rows);
+    }
+  }
+  if (titleList.length || bodyList.length) {
+    languageDefinitions.forEach((language, index) => {
+      normalized[language.label] = { title: String(titleList[index] ?? normalized[language.label].title ?? ""), body: String(bodyList[index] ?? normalized[language.label].body ?? "") };
+    });
+  }
+  return normalized;
+}
+
 function configsToNoticePayload(configs: NoticeConfig[]) {
   const payload: Record<string, unknown> = {};
   for (const config of configs) {
     const slot = Number(config.slot);
     const suffix = slot === 1 ? "" : String(slot);
-    payload[`Titel${suffix}`] = config.title ?? "";
-    payload[`Body${suffix}`] = config.body ?? "";
+    const contents = normalizeLanguageContents(config.contents, { title: config.title, body: config.body });
+    const primary = contents[defaultMailLanguage].title && contents[defaultMailLanguage].body ? contents[defaultMailLanguage] : Object.values(contents).find((content) => content.title || content.body) ?? { title: "", body: "" };
+    const languages = languageContentList(contents);
+    payload[`TemplateName${slot}`] = config.templateName ?? "";
+    payload[`Titel${suffix}`] = primary.title ?? "";
+    payload[`Body${suffix}`] = primary.body ?? "";
+    payload[`LangIdLst${slot}`] = languages.map((language) => language.id);
+    payload[`TitelLst${slot}`] = languages.map((language) => language.title);
+    payload[`BodyLst${slot}`] = languages.map((language) => language.body);
+    payload[`Lang${slot}`] = languages;
+    payload[`BodyData${slot}`] = [JSON.stringify({ ...multiLanguagePayload(contents), type: "multiLanguageNotice", templateName: config.templateName ?? "" })];
     payload[`Rs${slot}`] = config.imagePath ?? "";
     const sid = toFlexibleNumberArray(config.sid);
     payload[`Typ${slot}`] = Number(config.typ) === 1 && sid.length ? 1 : 0;

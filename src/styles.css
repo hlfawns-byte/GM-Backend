@@ -1576,6 +1576,57 @@ tbody tr:hover,
   min-height: 130px;
 }
 
+.notice-language-tabs {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  border-bottom: 1px solid #e2e8f0;
+}
+
+.notice-language-tabs button,
+.mail-language-tabs button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 5px;
+}
+
+.notice-language-tabs button {
+  min-height: 34px;
+  border: 1px solid #d9e1eb;
+  border-bottom: 0;
+  border-radius: 3px 3px 0 0;
+  padding: 6px 12px;
+  color: #5d6878;
+  background: #fbfcfe;
+  font-weight: 650;
+  white-space: normal;
+  line-height: 1.2;
+}
+
+.notice-language-tabs button.active {
+  color: #2f8fea;
+  background: #fff;
+}
+
+.notice-language-tabs small,
+.mail-language-tabs small {
+  display: inline-grid;
+  place-items: center;
+  min-width: 18px;
+  height: 18px;
+  border-radius: 999px;
+  color: #fff;
+  background: #6b7a90;
+  font-size: 11px;
+  line-height: 1;
+}
+
+.notice-language-tabs button.active small,
+.mail-language-tabs button.active small {
+  background: #2f8fea;
+}
+
 .notice-form footer {
   display: flex;
   justify-content: flex-end;
@@ -2485,6 +2536,7 @@ tbody tr:hover,
 .modal-backdrop {
   position: fixed;
   inset: 0;
+  z-index: 70;
   display: grid;
   place-items: center;
   overflow: hidden;
