@@ -247,9 +247,6 @@ function validateRewardRows(rewards: MailRewardItem[], items: ItemOption[]) {
 const MAIL_DEFAULT_REG_BEGIN = "2020-01-01T00:00";
 const MAIL_DEFAULT_EXPIRE = "2050-12-31T23:59";
 const NOTICE_DEFAULT_IMAGE = "/notice/banner_1.png";
-const NOTICE_DEFAULT_REG_BEGIN = "2020-01-01T00:00";
-const NOTICE_DEFAULT_REG_END = "2050-12-31T23:59";
-const NOTICE_DEFAULT_PLATFORMS = "1,2";
 
 function defaultRegEndTime() {
   return toDatetimeLocal(new Date());
@@ -547,8 +544,21 @@ function languageContentList(contents?: Record<string, MailTemplateContent>) {
   }));
 }
 
+function fillMissingLanguageContents(contents?: Record<string, MailTemplateContent>, fallback?: MailTemplateContent) {
+  const normalized = normalizeLanguageContents(contents, fallback);
+  const defaultContent = normalized[defaultMailLanguage];
+  const fallbackContent = defaultContent.title && defaultContent.body ? defaultContent : Object.values(normalized).find((content) => content.title && content.body) ?? { title: fallback?.title ?? "", body: fallback?.body ?? "" };
+  return Object.fromEntries(languageDefinitions.map((language) => {
+    const content = normalized[language.label] ?? { title: "", body: "" };
+    return [language.label, {
+      title: content.title.trim() || fallbackContent.title,
+      body: content.body.trim() || fallbackContent.body,
+    }];
+  })) as Record<string, MailTemplateContent>;
+}
+
 function multiLanguagePayload(contents?: Record<string, MailTemplateContent>) {
-  const languages = languageContentList(contents);
+  const languages = languageContentList(fillMissingLanguageContents(contents));
   return {
     type: "multiLanguage",
     defaultLanguageId: defaultLanguageDefinition.id,
@@ -558,7 +568,7 @@ function multiLanguagePayload(contents?: Record<string, MailTemplateContent>) {
 }
 
 function mailLangListPayload(contents?: Record<string, MailTemplateContent>) {
-  return languageContentList(contents)
+  return languageContentList(fillMissingLanguageContents(contents))
     .filter((language) => language.id !== defaultLanguageDefinition.id && language.title.trim() && language.body.trim())
     .map((language) => ({
       Language: language.id,
@@ -2792,19 +2802,12 @@ function MailTemplateEditor({ endpoint = "/local-api/mail-templates", kind = "�
       setError("请至少填写一个语言的邮件标题和邮件内容");
       return;
     }
-    const incompleteLanguage = mailLanguages.find((language) => {
-      const content = cleanedContents[language];
-      return Boolean(content.title) !== Boolean(content.body);
-    });
-    if (incompleteLanguage) {
-      setError(`${incompleteLanguage} 的邮件标题和邮件内容需要同时填写`);
-      return;
-    }
+    const filledContents = fillMissingLanguageContents(cleanedContents);
     setError("");
     setSaving(true);
     try {
-      const primary = cleanedContents[defaultMailLanguage].title && cleanedContents[defaultMailLanguage].body ? cleanedContents[defaultMailLanguage] : Object.values(cleanedContents).find((content) => content.title && content.body) ?? { title: "", body: "" };
-      const response = await fetch(endpoint, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ id: template?.id, name: cleanName, title: primary.title, body: primary.body, contents: cleanedContents }) });
+      const primary = filledContents[defaultMailLanguage].title && filledContents[defaultMailLanguage].body ? filledContents[defaultMailLanguage] : Object.values(filledContents).find((content) => content.title && content.body) ?? { title: "", body: "" };
+      const response = await fetch(endpoint, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ id: template?.id, name: cleanName, title: primary.title, body: primary.body, contents: filledContents }) });
       if (!response.ok) throw new Error(`HTTP ${response.status}`);
       onSaved();
     } catch (saveError) {
@@ -3299,24 +3302,16 @@ function NoticePage({ postWithToken }: { postWithToken: (endpoint: string, body:
 
   const save = async () => {
     if (saving) return;
-    const normalizedContents = normalizeLanguageContents(form.contents, { title: form.title, body: form.body });
+    const normalizedContents = fillMissingLanguageContents(form.contents, { title: form.title, body: form.body });
     const primaryNoticeContent = normalizedContents[defaultMailLanguage].title && normalizedContents[defaultMailLanguage].body ? normalizedContents[defaultMailLanguage] : Object.values(normalizedContents).find((content) => content.title && content.body) ?? { title: "", body: "" };
-    const incompleteLanguage = mailLanguages.find((language) => {
-      const content = normalizedContents[language];
-      return Boolean(content.title.trim()) !== Boolean(content.body.trim());
-    });
-    if (incompleteLanguage) {
-      setStatus(`公告保存失败：${incompleteLanguage} 的公告标题和公告内容需要同时填写`);
-      return;
-    }
     const effectiveForm = {
       ...form,
       imagePath: form.imagePath.trim() || NOTICE_DEFAULT_IMAGE,
       typ: Number(form.typ) === 1 ? 1 : 0,
       sid: Number(form.typ) === 1 ? form.sid : "",
-      regBegin: form.regBegin || NOTICE_DEFAULT_REG_BEGIN,
-      regEnd: form.regEnd || NOTICE_DEFAULT_REG_END,
-      platforms: form.platforms || NOTICE_DEFAULT_PLATFORMS,
+      regBegin: form.regBegin || "",
+      regEnd: form.regEnd || "",
+      platforms: form.platforms || "",
       versions: form.versions || "",
     };
     const sidValues = toFlexibleNumberArray(effectiveForm.sid);
@@ -3324,15 +3319,15 @@ function NoticePage({ postWithToken }: { postWithToken: (endpoint: string, body:
       setStatus("公告保存失败：指定服务器未填写");
       return;
     }
-    if (!parseDatetimeLocalSeconds(effectiveForm.regBegin)) {
+    if (effectiveForm.regBegin && !parseDatetimeLocalSeconds(effectiveForm.regBegin)) {
       setStatus("公告保存失败：注册开始时间无效");
       return;
     }
-    if (!parseDatetimeLocalSeconds(effectiveForm.regEnd)) {
+    if (effectiveForm.regEnd && !parseDatetimeLocalSeconds(effectiveForm.regEnd)) {
       setStatus("公告保存失败：注册结束时间无效");
       return;
     }
-    if (parseDatetimeLocalSeconds(effectiveForm.regEnd) <= parseDatetimeLocalSeconds(effectiveForm.regBegin)) {
+    if (effectiveForm.regBegin && effectiveForm.regEnd && parseDatetimeLocalSeconds(effectiveForm.regEnd) <= parseDatetimeLocalSeconds(effectiveForm.regBegin)) {
       setStatus("公告保存失败：注册结束时间必须晚于注册开始时间");
       return;
     }
@@ -3510,12 +3505,12 @@ function configsToNoticePayload(configs: NoticeConfig[]) {
     const effectiveConfig = {
       ...config,
       imagePath: config.imagePath?.trim() || NOTICE_DEFAULT_IMAGE,
-      regBegin: config.regBegin || NOTICE_DEFAULT_REG_BEGIN,
-      regEnd: config.regEnd || NOTICE_DEFAULT_REG_END,
-      platforms: config.platforms || NOTICE_DEFAULT_PLATFORMS,
+      regBegin: config.regBegin || "",
+      regEnd: config.regEnd || "",
+      platforms: config.platforms || "",
       versions: config.versions || "",
     };
-    const contents = normalizeLanguageContents(effectiveConfig.contents, { title: effectiveConfig.title, body: effectiveConfig.body });
+    const contents = fillMissingLanguageContents(effectiveConfig.contents, { title: effectiveConfig.title, body: effectiveConfig.body });
     const primary = contents[defaultMailLanguage].title && contents[defaultMailLanguage].body ? contents[defaultMailLanguage] : Object.values(contents).find((content) => content.title || content.body) ?? { title: "", body: "" };
     const langList = mailLangListPayload(contents);
     payload[`Titel${suffix}`] = primary.title ?? "";
@@ -3523,14 +3518,15 @@ function configsToNoticePayload(configs: NoticeConfig[]) {
     payload[`LangLst${slot}`] = langList;
     payload[`Rs${slot}`] = effectiveConfig.imagePath;
     const sid = toFlexibleNumberArray(effectiveConfig.sid);
-    payload[`Typ${slot}`] = Number(effectiveConfig.typ) === 1 && sid.length ? 1 : 0;
-    payload[`RegtBegin${slot}`] = parseDatetimeLocalSeconds(effectiveConfig.regBegin);
-    payload[`RegtEnd${slot}`] = parseDatetimeLocalSeconds(effectiveConfig.regEnd);
-    payload[`Sid${slot}`] = sid;
+    const isSpecifiedServer = Number(effectiveConfig.typ) === 1 && sid.length > 0;
+    payload[`Typ${slot}`] = isSpecifiedServer ? 1 : 0;
+    payload[`RegtBegin${slot}`] = effectiveConfig.regBegin ? parseDatetimeLocalSeconds(effectiveConfig.regBegin) : 0;
+    payload[`RegtEnd${slot}`] = effectiveConfig.regEnd ? parseDatetimeLocalSeconds(effectiveConfig.regEnd) : 0;
+    payload[`Sid${slot}`] = isSpecifiedServer ? sid : null;
     const platforms = toPlatformNumberArray(effectiveConfig.platforms);
     const versions = toVersionNumberArray(effectiveConfig.versions);
-    payload[`Platform${slot}`] = platforms.length ? platforms : toPlatformNumberArray(NOTICE_DEFAULT_PLATFORMS);
-    payload[`Version${slot}`] = versions.length ? versions : [];
+    payload[`Platform${slot}`] = platforms.length ? platforms : null;
+    payload[`Version${slot}`] = versions.length ? versions : null;
   }
   return payload;
 }
