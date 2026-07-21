@@ -455,6 +455,8 @@ const modules: Record<SectionKey, ModuleConfig> = {
 function toNumberArray(value?: string) {
   return String(value ?? "")
     .split(/[\s,，;；]+/)
+    .map((item) => item.trim())
+    .filter(Boolean)
     .map((item) => Number(item.trim()))
     .filter((item) => Number.isFinite(item));
 }
@@ -462,6 +464,8 @@ function toNumberArray(value?: string) {
 function toFlexibleNumberArray(value?: string) {
   return String(value ?? "")
     .split(/[\s,，;；]+/)
+    .map((item) => item.trim())
+    .filter(Boolean)
     .map((item) => parseFlexibleNumber(item.trim()))
     .filter((item) => Number.isFinite(item));
 }
@@ -2400,6 +2404,7 @@ function MailEditor({ canUploadItemTable, global, initialMail, items, onBack, on
   const [mailType, setMailType] = React.useState(global ? "global" : "personal");
   const [templateId, setTemplateId] = React.useState("custom");
   const [rewardTemplateId, setRewardTemplateId] = React.useState("custom");
+  const [rewardMode, setRewardMode] = React.useState<"none" | "reward">(() => getArray(initialMail?.ItemLst).length ? "reward" : "none");
   const [title, setTitle] = React.useState(String(initialMail?.Titel ?? initialMail?.Title ?? ""));
   const [body, setBody] = React.useState(String(initialMail?.Body ?? ""));
   const [targetIds, setTargetIds] = React.useState(getArray(initialMail?.TargetID).join(","));
@@ -2466,7 +2471,7 @@ function MailEditor({ canUploadItemTable, global, initialMail, items, onBack, on
       setError("请选择有效的过期时间");
       return;
     }
-    const rewardValidation = validateRewardRows(rewards, items);
+    const rewardValidation = rewardMode === "reward" ? validateRewardRows(rewards, items) : { ok: true, itemList: [] as number[] };
     if (!rewardValidation.ok) {
       setError(rewardValidation.message ?? "请填写有效的奖励道具和数量，或选择无奖励");
       return;
@@ -2555,7 +2560,7 @@ function MailEditor({ canUploadItemTable, global, initialMail, items, onBack, on
         LangLst: selectedTemplateContents ? mailLangListPayload(selectedTemplateContents) : [],
         BodyData: [],
         BodyData2: [],
-        ItemLst: rewardValidation.itemList,
+        ItemLst: rewardMode === "reward" ? rewardValidation.itemList : [],
         Platform: platformList,
         Version: versionList,
         __conditionRows: conditionRows,
@@ -2627,8 +2632,9 @@ function MailEditor({ canUploadItemTable, global, initialMail, items, onBack, on
               <small className="mail-condition-hint">{isGlobalMail ? "多个条件同时填写时为且的关系。填写“游戏内区服”后，会按接口 Typ=2 将 TargetID 作为区服ID发送。" : "多个条件同时填写时为且的关系。个人邮件会先由GM后台筛选用户，再提交符合条件的用户ID。"}</small>
             </div>
           </div>
-          <label className="mail-form-row"><span>奖励模板</span><select value={rewardTemplateId} onChange={(event) => setRewardTemplateId(event.target.value)}><option value="custom">自定义</option>{rewardTemplates.map((template) => <option key={template.id} value={template.id}>{template.title}</option>)}</select></label>
-          <RewardRows canUploadItemTable={canUploadItemTable} items={items} onUploadItemTable={onUploadItemTable} rewards={rewards} setRewards={setRewards} />
+          <label className="mail-form-row"><span>邮件奖励类型</span><select value={rewardMode} onChange={(event) => setRewardMode(event.target.value === "reward" ? "reward" : "none")}><option value="none">无奖励</option><option value="reward">有奖励</option></select></label>
+          {rewardMode === "reward" && <label className="mail-form-row"><span>奖励模板</span><select value={rewardTemplateId} onChange={(event) => setRewardTemplateId(event.target.value)}><option value="custom">自定义</option>{rewardTemplates.map((template) => <option key={template.id} value={template.id}>{template.title}</option>)}</select></label>}
+          {rewardMode === "reward" && <RewardRows canUploadItemTable={canUploadItemTable} items={items} onUploadItemTable={onUploadItemTable} rewards={rewards} setRewards={setRewards} />}
           {!isGlobalMail && <label className="mail-form-row mail-textarea-row"><span>用户 ID</span><textarea value={targetIds} onChange={(event) => setTargetIds(event.target.value)} /></label>}
           <label className="mail-form-row"><span>邮件标题</span><input value={title} onChange={(event) => setTitle(event.target.value)} /></label>
           <label className="mail-form-row mail-textarea-row"><span>邮件内容</span><textarea value={body} onChange={(event) => setBody(event.target.value)} /></label>
@@ -3501,20 +3507,28 @@ function configsToNoticePayload(configs: NoticeConfig[]) {
   for (const config of configs) {
     const slot = Number(config.slot);
     const suffix = slot === 1 ? "" : String(slot);
-    const contents = normalizeLanguageContents(config.contents, { title: config.title, body: config.body });
+    const effectiveConfig = {
+      ...config,
+      imagePath: config.imagePath?.trim() || NOTICE_DEFAULT_IMAGE,
+      regBegin: config.regBegin || NOTICE_DEFAULT_REG_BEGIN,
+      regEnd: config.regEnd || NOTICE_DEFAULT_REG_END,
+      platforms: config.platforms || NOTICE_DEFAULT_PLATFORMS,
+      versions: config.versions || "",
+    };
+    const contents = normalizeLanguageContents(effectiveConfig.contents, { title: effectiveConfig.title, body: effectiveConfig.body });
     const primary = contents[defaultMailLanguage].title && contents[defaultMailLanguage].body ? contents[defaultMailLanguage] : Object.values(contents).find((content) => content.title || content.body) ?? { title: "", body: "" };
     const langList = mailLangListPayload(contents);
     payload[`Titel${suffix}`] = primary.title ?? "";
     payload[`Body${suffix}`] = primary.body ?? "";
     payload[`LangLst${slot}`] = langList;
-    payload[`Rs${slot}`] = config.imagePath ?? "";
-    const sid = toFlexibleNumberArray(config.sid);
-    payload[`Typ${slot}`] = Number(config.typ) === 1 && sid.length ? 1 : 0;
-    payload[`RegtBegin${slot}`] = config.regBegin ? parseDatetimeLocalSeconds(config.regBegin) : 0;
-    payload[`RegtEnd${slot}`] = config.regEnd ? parseDatetimeLocalSeconds(config.regEnd) : 0;
-    payload[`Sid${slot}`] = sid.length ? sid : null;
-    const platforms = toPlatformNumberArray(config.platforms || NOTICE_DEFAULT_PLATFORMS);
-    const versions = toVersionNumberArray(config.versions);
+    payload[`Rs${slot}`] = effectiveConfig.imagePath;
+    const sid = toFlexibleNumberArray(effectiveConfig.sid);
+    payload[`Typ${slot}`] = Number(effectiveConfig.typ) === 1 && sid.length ? 1 : 0;
+    payload[`RegtBegin${slot}`] = parseDatetimeLocalSeconds(effectiveConfig.regBegin);
+    payload[`RegtEnd${slot}`] = parseDatetimeLocalSeconds(effectiveConfig.regEnd);
+    payload[`Sid${slot}`] = sid;
+    const platforms = toPlatformNumberArray(effectiveConfig.platforms);
+    const versions = toVersionNumberArray(effectiveConfig.versions);
     payload[`Platform${slot}`] = platforms.length ? platforms : toPlatformNumberArray(NOTICE_DEFAULT_PLATFORMS);
     payload[`Version${slot}`] = versions.length ? versions : [];
   }
