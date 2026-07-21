@@ -44,6 +44,7 @@ type SectionKey =
   | "giftClaim"
   | "giftRecall"
   | "notice"
+  | "noticeTemplate"
   | "sprint"
   | "systemMsg"
   | "serverTime"
@@ -254,17 +255,14 @@ const languageDefinitions = [
   { id: 1, label: "中文(简体)", code: "ChineseSimplified", aliases: ["中文(简体)", "简体中文", "ChineseSimplified"] },
   { id: 2, label: "中文(繁体)", code: "ChineseTraditional", aliases: ["中文(繁体)", "繁体中文", "ChineseTraditional"] },
   { id: 3, label: "英文", code: "English", aliases: ["英文", "英语", "English"] },
-  { id: 4, label: "韩文", code: "Korean", aliases: ["韩文", "韩语", "Korean"] },
-  { id: 5, label: "日文", code: "Japanese", aliases: ["日文", "日语", "Japanese"] },
-  { id: 6, label: "德语", code: "German", aliases: ["德语", "German"] },
-  { id: 7, label: "法语", code: "French", aliases: ["法语", "French"] },
-  { id: 8, label: "西班牙语", code: "Spanish", aliases: ["西班牙语", "Spanish"] },
+  { id: 4, label: "日语", code: "Japanese", aliases: ["日文", "日语", "Japanese"] },
+  { id: 5, label: "韩语", code: "Korean", aliases: ["韩文", "韩语", "Korean"] },
+  { id: 6, label: "俄语", code: "Russian", aliases: ["俄语", "Russian"] },
+  { id: 7, label: "越南语", code: "Vietnamese", aliases: ["越南语", "Vietnamese"] },
+  { id: 8, label: "德语", code: "German", aliases: ["德语", "German"] },
   { id: 9, label: "葡萄牙语", code: "Portuguese", aliases: ["葡萄牙语", "Portuguese", "葡语"] },
-  { id: 10, label: "俄语", code: "Russian", aliases: ["俄语", "Russian"] },
-  { id: 11, label: "意大利语", code: "Italian", aliases: ["意大利语", "Italian"] },
-  { id: 12, label: "印尼语", code: "Indonesian", aliases: ["印尼语", "Indonesian"] },
-  { id: 13, label: "泰语", code: "Thai", aliases: ["泰语", "Thai"] },
-  { id: 14, label: "越南语", code: "Vietnamese", aliases: ["越南语", "Vietnamese"] },
+  { id: 10, label: "西班牙语", code: "Spanish", aliases: ["西班牙语", "Spanish"] },
+  { id: 11, label: "法语", code: "French", aliases: ["法语", "French"] },
 ];
 const mailLanguages = languageDefinitions.map((language) => language.label);
 const defaultLanguageDefinition = languageDefinitions.find((language) => language.id === 3) ?? languageDefinitions[0];
@@ -320,6 +318,7 @@ const navGroups = [
     icon: Bell,
     items: [
       { key: "notice", label: "公告" },
+      { key: "noticeTemplate", label: "公告模板" },
     ],
   },
   {
@@ -440,6 +439,7 @@ const modules: Record<SectionKey, ModuleConfig> = {
   giftClaim: { title: "领取记录", description: "礼包码领取记录查询", icon: Gift, status: "live", actions: [] },
   giftRecall: { title: "测试召回邮件", description: "测试召回邮件发送", icon: Mail, status: "live", actions: [] },
   notice: { title: "公告", description: "配置游戏内公告展示内容", icon: Bell, status: "live", actions: [] },
+  noticeTemplate: { title: "公告模板", description: "维护公告标题和内容模板", icon: Bell, status: "live", actions: [] },
   sprint: { title: "冲刺活动", description: "冲刺活动新增和列表", icon: Trophy, status: "live", actions: [{ key: "gmSprintLst", label: "活动列表", endpoint: "/gmSprintLst", fields: [], buildBody: () => ({}) }, { key: "gmSprintAddLst", label: "新增活动", endpoint: "/gmSprintAddLst", fields: [{ key: "Body", label: "活动JSON", kind: "textarea" }], buildBody: (v) => parseJson(v.Body) }] },
   systemMsg: { title: "系统消息", description: "向在线玩家发送系统消息", icon: MessageSquare, status: "live", actions: [{ key: "gmSendSystemMsg", label: "发送消息", endpoint: "/gmSendSystemMsg", fields: [{ key: "Msg", label: "消息内容", kind: "textarea" }], buildBody: (v) => ({ Msg: v.Msg }) }] },
   serverTime: { title: "开服管理", description: "查询和配置开服时间", icon: Server, status: "live", actions: [] },
@@ -1111,7 +1111,7 @@ function App() {
             </section>
           )}
 
-          {active === "dashboard" ? <Dashboard results={results} accounts={accounts} /> : active === "playerInfo" ? <PlayerInfoPage postWithToken={postWithToken} /> : active === "bindUid" ? <BindUidPage postWithToken={postWithToken} /> : active === "gmState" ? <BanControlPage postWithToken={postWithToken} /> : active === "silence" ? <SilencePage operator={session.operatorAccount} /> : active.startsWith("mail") ? <MailSuitePage active={active as MailSectionKey} canUploadItemTable={auth.isAdmin} postWithToken={postWithToken} session={session} setActive={setActive} /> : active.startsWith("gift") ? <GiftSuitePage active={active as GiftSectionKey} canUploadItemTable={auth.isAdmin} postWithToken={postWithToken} /> : active === "notice" ? <NoticePage postWithToken={postWithToken} /> : active === "serverTime" ? <OpenServerPage postWithToken={postWithToken} /> : moduleConfig.status === "pending" ? <UnavailablePanel module={moduleConfig} /> : (
+          {active === "dashboard" ? <Dashboard results={results} accounts={accounts} /> : active === "playerInfo" ? <PlayerInfoPage postWithToken={postWithToken} /> : active === "bindUid" ? <BindUidPage postWithToken={postWithToken} /> : active === "gmState" ? <BanControlPage postWithToken={postWithToken} /> : active === "silence" ? <SilencePage operator={session.operatorAccount} /> : active.startsWith("mail") ? <MailSuitePage active={active as MailSectionKey} canUploadItemTable={auth.isAdmin} postWithToken={postWithToken} session={session} setActive={setActive} /> : active.startsWith("gift") ? <GiftSuitePage active={active as GiftSectionKey} canUploadItemTable={auth.isAdmin} postWithToken={postWithToken} /> : active === "notice" ? <NoticePage postWithToken={postWithToken} /> : active === "noticeTemplate" ? <NoticeTemplatePage /> : active === "serverTime" ? <OpenServerPage postWithToken={postWithToken} /> : moduleConfig.status === "pending" ? <UnavailablePanel module={moduleConfig} /> : (
             <>
               <section className="filter-panel">
                 <div className="panel-heading">
@@ -2737,7 +2737,7 @@ function MailTemplateList({ onCreate, onDelete, onEdit, query, setQuery, templat
   return <section className="mail-page"><div className="mail-filter-line"><label>模板名称：<input value={query} onChange={(event) => setQuery(event.target.value)} /></label><button type="button"><Search size={14} />Search</button></div><section className="mail-table-card"><button className="mail-primary-button" onClick={onCreate} type="button">新建</button><MailDataTable columns={["ID", "名称", "标题", "创建时间", "更新时间", "操作"]} rows={rows.map((template) => ({ ID: template.id, 名称: <span className="mail-ellipsis-cell" title={template.name}>{template.name}</span>, 标题: <span className="mail-ellipsis-cell" title={templatePrimaryContent(template).title}>{templatePrimaryContent(template).title || "暂无数据"}</span>, 创建时间: formatTimestampValue(template.createdAt), 更新时间: formatTimestampValue(template.updatedAt), 操作: <div className="mail-action-buttons"><button onClick={() => onEdit(template)} type="button">编辑</button><button onClick={() => void onDelete(template)} type="button">删除</button></div> }))} /></section></section>;
 }
 
-function MailTemplateEditor({ onBack, onSaved, template }: { onBack: () => void; onSaved: () => void; template?: MailTemplate }) {
+function MailTemplateEditor({ endpoint = "/local-api/mail-templates", kind = "邮件", onBack, onSaved, template }: { endpoint?: string; kind?: "邮件" | "公告"; onBack: () => void; onSaved: () => void; template?: MailTemplate }) {
   const [name, setName] = React.useState(template?.name ?? "");
   const [error, setError] = React.useState("");
   const [saving, setSaving] = React.useState(false);
@@ -2754,8 +2754,8 @@ function MailTemplateEditor({ onBack, onSaved, template }: { onBack: () => void;
     const header = ["模板名称", ...mailLanguages.flatMap((language) => [`${language}标题`, `${language}内容`])];
     const example = ["示例模板", ...mailLanguages.flatMap((language) => [`${language}邮件标题`, `${language}邮件内容`])];
     const sheet = XLSX.utils.aoa_to_sheet([header, example]);
-    XLSX.utils.book_append_sheet(workbook, sheet, "邮件模板");
-    XLSX.writeFile(workbook, "邮件模板导入模板.xlsx");
+    XLSX.utils.book_append_sheet(workbook, sheet, `${kind}模板`);
+    XLSX.writeFile(workbook, `${kind}模板导入模板.xlsx`);
   };
   const uploadTemplate = async (file: File) => {
     try {
@@ -2796,7 +2796,7 @@ function MailTemplateEditor({ onBack, onSaved, template }: { onBack: () => void;
     setSaving(true);
     try {
       const primary = cleanedContents[defaultMailLanguage].title && cleanedContents[defaultMailLanguage].body ? cleanedContents[defaultMailLanguage] : Object.values(cleanedContents).find((content) => content.title && content.body) ?? { title: "", body: "" };
-      const response = await fetch("/local-api/mail-templates", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ id: template?.id, name: cleanName, title: primary.title, body: primary.body, contents: cleanedContents }) });
+      const response = await fetch(endpoint, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ id: template?.id, name: cleanName, title: primary.title, body: primary.body, contents: cleanedContents }) });
       if (!response.ok) throw new Error(`HTTP ${response.status}`);
       onSaved();
     } catch (saveError) {
@@ -2808,12 +2808,12 @@ function MailTemplateEditor({ onBack, onSaved, template }: { onBack: () => void;
   return (
     <section className="mail-edit-page">
       <div className="mail-edit-card">
-        <header>邮件模板</header>
+        <header>{kind}模板</header>
         <div className="mail-template-name"><label>模板名称<input maxLength={MAX_TEMPLATE_NAME_LENGTH} value={name} onChange={(event) => setName(event.target.value)} placeholder="请输入模板名称" /></label><small>{name.length}/{MAX_TEMPLATE_NAME_LENGTH}</small></div>
         <div className="mail-language-tabs">{languageDefinitions.map((language) => <button className={activeLanguage === language.label ? "active" : ""} key={language.id} onClick={() => setActiveLanguage(language.label)} type="button"><small>{language.id}</small>{language.label}</button>)}</div>
         <div className="mail-form mail-template-form">
-          <label className="mail-form-row"><span>邮件标题</span><input value={activeContent.title} onChange={(event) => updateContent({ title: event.target.value })} placeholder={`请输入${activeLanguage}邮件标题`} /></label>
-          <label className="mail-form-row mail-template-body"><span>邮件内容</span><textarea value={activeContent.body} onChange={(event) => updateContent({ body: event.target.value })} placeholder={`请输入${activeLanguage}邮件内容`} /></label>
+          <label className="mail-form-row"><span>{kind}标题</span><input value={activeContent.title} onChange={(event) => updateContent({ title: event.target.value })} placeholder={`请输入${activeLanguage}${kind}标题`} /></label>
+          <label className="mail-form-row mail-template-body"><span>{kind}内容</span><textarea value={activeContent.body} onChange={(event) => updateContent({ body: event.target.value })} placeholder={`请输入${activeLanguage}${kind}内容`} /></label>
           <div className="mail-form-row">
             <span>模板文件</span>
             <div className="mail-template-file-actions">
@@ -2831,6 +2831,29 @@ function MailTemplateEditor({ onBack, onSaved, template }: { onBack: () => void;
       </div>
     </section>
   );
+}
+
+function NoticeTemplatePage() {
+  const [templates, setTemplates] = React.useState<MailTemplate[]>([]);
+  const [query, setQuery] = React.useState("");
+  const [view, setView] = React.useState<"list" | "edit">("list");
+  const [editingTemplate, setEditingTemplate] = React.useState<MailTemplate | undefined>();
+  const refresh = React.useCallback(async () => {
+    const response = await fetch("/local-api/notice-templates");
+    const payload = (await response.json().catch(() => ({}))) as { templates?: MailTemplate[] };
+    setTemplates(payload.templates ?? []);
+  }, []);
+  React.useEffect(() => {
+    void refresh();
+  }, [refresh]);
+  if (view === "edit") {
+    return <MailTemplateEditor endpoint="/local-api/notice-templates" kind="公告" onBack={() => setView("list")} onSaved={() => { setView("list"); setEditingTemplate(undefined); void refresh(); }} template={editingTemplate} />;
+  }
+  return <MailTemplateList query={query} setQuery={setQuery} templates={templates} onCreate={() => { setEditingTemplate(undefined); setView("edit"); }} onEdit={(template) => { setEditingTemplate(template); setView("edit"); }} onDelete={async (template) => {
+    if (!window.confirm(`确认删除公告模板「${template.name}」？`)) return;
+    await fetch(`/local-api/notice-templates/${encodeURIComponent(template.id)}`, { method: "DELETE" });
+    await refresh();
+  }} />;
 }
 
 function GiftSuitePage({ active, canUploadItemTable, postWithToken }: { active: GiftSectionKey; canUploadItemTable: boolean; postWithToken: (endpoint: string, body: unknown) => Promise<ApiPostResponse> }) {
@@ -3186,10 +3209,12 @@ function UnavailablePanel({ module }: { module: ModuleConfig }) {
 function NoticePage({ postWithToken }: { postWithToken: (endpoint: string, body: unknown) => Promise<ApiPostResponse> }) {
   const [notices, setNotices] = React.useState<NoticeConfig[]>([]);
   const [serverOptions, setServerOptions] = React.useState<ServerOption[]>([]);
+  const [noticeTemplates, setNoticeTemplates] = React.useState<MailTemplate[]>([]);
   const [editing, setEditing] = React.useState<NoticeConfig | null>(null);
   const [form, setForm] = React.useState<NoticeConfig>({ slot: 1, templateName: "", title: "", body: "", contents: emptyLanguageContents(), imagePath: "", typ: 0, sid: "", regBegin: "", regEnd: "", platforms: "", versions: "" });
   const [noticeDrafts, setNoticeDrafts] = React.useState<NoticeConfig[]>([]);
   const [activeNoticeLanguage, setActiveNoticeLanguage] = React.useState(defaultMailLanguage);
+  const [saving, setSaving] = React.useState(false);
   const [status, setStatus] = React.useState("");
   const palettes = ["blue", "green", "orange"];
   const emptyNotice = (slot: number): NoticeConfig => ({ slot, templateName: "", title: "", body: "", contents: emptyLanguageContents(), imagePath: "", typ: 0, sid: "", regBegin: "", regEnd: "", platforms: "", versions: "" });
@@ -3231,6 +3256,13 @@ function NoticePage({ postWithToken }: { postWithToken: (endpoint: string, body:
   }, []);
 
   React.useEffect(() => {
+    void fetch("/local-api/notice-templates")
+      .then((response) => response.json())
+      .then((payload: { templates?: MailTemplate[] }) => setNoticeTemplates(payload.templates ?? []))
+      .catch(() => setNoticeTemplates([]));
+  }, []);
+
+  React.useEffect(() => {
     if (!editing) return undefined;
     document.body.classList.add("modal-open");
     return () => {
@@ -3258,6 +3290,7 @@ function NoticePage({ postWithToken }: { postWithToken: (endpoint: string, body:
   };
 
   const save = async () => {
+    if (saving) return;
     const normalizedContents = normalizeLanguageContents(form.contents, { title: form.title, body: form.body });
     const primaryNoticeContent = normalizedContents[defaultMailLanguage].title && normalizedContents[defaultMailLanguage].body ? normalizedContents[defaultMailLanguage] : Object.values(normalizedContents).find((content) => content.title && content.body) ?? { title: "", body: "" };
     const incompleteLanguage = mailLanguages.find((language) => {
@@ -3290,16 +3323,23 @@ function NoticePage({ postWithToken }: { postWithToken: (endpoint: string, body:
       return;
     }
     const normalizedForm = normalizeNotice({ ...form, title: primaryNoticeContent.title, body: primaryNoticeContent.body, contents: normalizedContents }, Number(form.slot) || 1);
-    const merged = [1, 2, 3].map((slot) => normalizeNotice(slot === normalizedForm.slot ? normalizedForm : noticeDrafts.find((notice) => Number(notice.slot) === slot) ?? notices.find((notice) => Number(notice.slot) === slot) ?? emptyNotice(slot), slot));
-    const result = await postWithToken("/gmNoticeAdd", configsToNoticePayload(merged));
-    const error = apiBusinessError(result);
-    if (error) {
-      setStatus(`公告保存失败：${error}`);
-      return;
+    setSaving(true);
+    try {
+      const merged = [1, 2, 3].map((slot) => normalizeNotice(slot === normalizedForm.slot ? normalizedForm : noticeDrafts.find((notice) => Number(notice.slot) === slot) ?? notices.find((notice) => Number(notice.slot) === slot) ?? emptyNotice(slot), slot));
+      const result = await postWithToken("/gmNoticeAdd", configsToNoticePayload(merged));
+      const error = apiBusinessError(result);
+      if (error) {
+        setStatus(`公告保存失败：${error}`);
+        return;
+      }
+      setStatus("公告已保存到服务器");
+      setEditing(null);
+      await refresh();
+    } catch (saveError) {
+      setStatus(saveError instanceof Error ? `公告保存失败：${saveError.message}` : "公告保存失败");
+    } finally {
+      setSaving(false);
     }
-    setStatus("公告已保存到服务器");
-    setEditing(null);
-    await refresh();
   };
 
   const noticeContents = normalizeLanguageContents(form.contents, { title: form.title, body: form.body });
@@ -3308,6 +3348,16 @@ function NoticePage({ postWithToken }: { postWithToken: (endpoint: string, body:
     const nextContents = { ...noticeContents, [activeNoticeLanguage]: { ...activeNoticeContent, ...patch } };
     const primary = nextContents[defaultMailLanguage] ?? Object.values(nextContents).find((content) => content.title || content.body) ?? { title: "", body: "" };
     setForm({ ...form, title: primary.title, body: primary.body, contents: nextContents });
+  };
+  const applyNoticeTemplate = (templateId: string) => {
+    const template = noticeTemplates.find((item) => item.id === templateId);
+    if (!template) {
+      setForm({ ...form, templateName: "", title: "", body: "", contents: emptyLanguageContents() });
+      return;
+    }
+    const contents = normalizeLanguageContents(template.contents, { title: template.title, body: template.body });
+    const primary = contents[defaultMailLanguage] ?? Object.values(contents).find((content) => content.title || content.body) ?? { title: "", body: "" };
+    setForm({ ...form, templateName: template.name, title: primary.title, body: primary.body, contents });
   };
 
   const deleteNotice = async (slot: number) => {
@@ -3360,7 +3410,7 @@ function NoticePage({ postWithToken }: { postWithToken: (endpoint: string, body:
             <header><strong>添加/修改公告</strong><button onClick={() => setEditing(null)} type="button">x</button></header>
             <div className="notice-form">
               <label>公告位置<select value={form.slot} onChange={(event) => switchNoticeSlot(Number(event.target.value))}><option value={1}>公告 1</option><option value={2}>公告 2</option><option value={3}>公告 3</option></select></label>
-              <label>公告模板名<input value={form.templateName ?? ""} onChange={(event) => setForm({ ...form, templateName: event.target.value })} placeholder="请输入公告模板名" /></label>
+              <label>公告模板<select value={noticeTemplates.find((template) => template.name === form.templateName)?.id ?? ""} onChange={(event) => applyNoticeTemplate(event.target.value)}><option value="">请选择公告模板</option>{noticeTemplates.map((template) => <option key={template.id} value={template.id}>{template.name}</option>)}</select></label>
               <div className="notice-language-tabs">{languageDefinitions.map((language) => <button className={activeNoticeLanguage === language.label ? "active" : ""} key={language.id} onClick={() => setActiveNoticeLanguage(language.label)} type="button"><small>{language.id}</small>{language.label}</button>)}</div>
               <label>公告标题<input value={activeNoticeContent.title} onChange={(event) => updateNoticeContent({ title: event.target.value })} placeholder={`请输入${activeNoticeLanguage}公告标题`} /></label>
               <label>公告内容<textarea value={activeNoticeContent.body} onChange={(event) => updateNoticeContent({ body: event.target.value })} placeholder={`请输入${activeNoticeLanguage}公告内容`} /></label>
@@ -3371,7 +3421,8 @@ function NoticePage({ postWithToken }: { postWithToken: (endpoint: string, body:
               <label>注册结束<input type="datetime-local" value={form.regEnd ?? ""} onChange={(event) => setForm({ ...form, regEnd: event.target.value })} /></label>
               <label>平台筛选<select value={form.platforms ?? ""} onChange={(event) => setForm({ ...form, platforms: event.target.value })}><option value="">全部平台</option><option value="1">GooglePlay</option><option value="2">iOS</option><option value="1,2">GooglePlay + iOS</option></select></label>
               <label>版本筛选<input value={form.versions ?? ""} onChange={(event) => setForm({ ...form, versions: event.target.value })} placeholder="例如 1.8.0.0；留空全部" /></label>
-              <footer><button onClick={() => void save()} type="button">保存</button><button onClick={() => setEditing(null)} type="button">取消</button></footer>
+              {status && <div className="mail-form-error">{status}</div>}
+              <footer><button disabled={saving} onClick={() => void save()} type="button">{saving ? "保存中..." : "保存"}</button><button disabled={saving} onClick={() => setEditing(null)} type="button">取消</button></footer>
             </div>
           </section>
         </div>

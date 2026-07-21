@@ -21,6 +21,7 @@ const files = {
   items: path.join(dataDir, "items.json"),
   itemUpload: path.join(dataDir, "uploads", "Item.xlsx"),
   mailTemplates: path.join(dataDir, "mail-templates.json"),
+  noticeTemplates: path.join(dataDir, "notice-templates.json"),
   rewardTemplates: path.join(dataDir, "reward-templates.json"),
   scheduledMails: path.join(dataDir, "scheduled-mails.json"),
   userLogs: path.join(dataDir, "user-logs.json"),
@@ -447,6 +448,32 @@ async function handleLocalApi(req, res, pathname) {
     const id = decodeURIComponent(mailTemplateMatch[1]);
     const templates = readJson(files.mailTemplates, []);
     writeJson(files.mailTemplates, (Array.isArray(templates) ? templates : []).filter((template) => String(template.id) !== id));
+    sendJson(res, 200, { Result: 0, id });
+    return true;
+  }
+
+  if (pathname === "/local-api/notice-templates" && req.method === "GET") {
+    sendJson(res, 200, { templates: readJson(files.noticeTemplates, []) });
+    return true;
+  }
+
+  if (pathname === "/local-api/notice-templates" && req.method === "POST") {
+    const body = await readJsonBody(req);
+    const templates = readJson(files.noticeTemplates, []);
+    const now = Math.floor(Date.now() / 1000);
+    const id = String(body.id ?? `nt-${Date.now()}`);
+    const existing = Array.isArray(templates) ? templates.find((template) => template.id === id) : null;
+    const next = { id, name: String(body.name ?? "未命名模板").slice(0, 30), title: String(body.title ?? ""), body: String(body.body ?? ""), contents: body.contents && typeof body.contents === "object" ? body.contents : undefined, createdAt: existing?.createdAt ?? now, updatedAt: now };
+    writeJson(files.noticeTemplates, [next, ...(Array.isArray(templates) ? templates : []).filter((template) => template.id !== id)]);
+    sendJson(res, 200, { template: next });
+    return true;
+  }
+
+  const noticeTemplateMatch = pathname.match(/^\/local-api\/notice-templates\/([^/]+)$/);
+  if (noticeTemplateMatch && req.method === "DELETE") {
+    const id = decodeURIComponent(noticeTemplateMatch[1]);
+    const templates = readJson(files.noticeTemplates, []);
+    writeJson(files.noticeTemplates, (Array.isArray(templates) ? templates : []).filter((template) => String(template.id) !== id));
     sendJson(res, 200, { Result: 0, id });
     return true;
   }
