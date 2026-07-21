@@ -246,7 +246,7 @@ function validateRewardRows(rewards: MailRewardItem[], items: ItemOption[]) {
 
 const MAIL_DEFAULT_REG_BEGIN = "2020-01-01T00:00";
 const MAIL_DEFAULT_EXPIRE = "2050-12-31T23:59";
-const NOTICE_DEFAULT_IMAGE = "/notice/banner_1.png";
+const NOTICE_DEFAULT_IMAGE = "notice_bg_1";
 
 function defaultRegEndTime() {
   return toDatetimeLocal(new Date());
@@ -3502,6 +3502,25 @@ function configsToNoticePayload(configs: NoticeConfig[]) {
   for (const config of configs) {
     const slot = Number(config.slot);
     const suffix = slot === 1 ? "" : String(slot);
+    const rawContents = normalizeLanguageContents(config.contents, { title: config.title, body: config.body });
+    const hasContent = Boolean(
+      String(config.title ?? "").trim()
+      || String(config.body ?? "").trim()
+      || Object.values(rawContents).some((content) => content.title.trim() || content.body.trim())
+    );
+    if (!hasContent) {
+      payload[`Titel${suffix}`] = "";
+      payload[`Body${suffix}`] = "";
+      payload[`LangLst${slot}`] = [];
+      payload[`Rs${slot}`] = "";
+      payload[`Typ${slot}`] = 0;
+      payload[`RegtBegin${slot}`] = 0;
+      payload[`RegtEnd${slot}`] = 0;
+      payload[`Sid${slot}`] = [];
+      payload[`Platform${slot}`] = [];
+      payload[`Version${slot}`] = [];
+      continue;
+    }
     const effectiveConfig = {
       ...config,
       imagePath: config.imagePath?.trim() || NOTICE_DEFAULT_IMAGE,
@@ -3522,11 +3541,11 @@ function configsToNoticePayload(configs: NoticeConfig[]) {
     payload[`Typ${slot}`] = isSpecifiedServer ? 1 : 0;
     payload[`RegtBegin${slot}`] = effectiveConfig.regBegin ? parseDatetimeLocalSeconds(effectiveConfig.regBegin) : 0;
     payload[`RegtEnd${slot}`] = effectiveConfig.regEnd ? parseDatetimeLocalSeconds(effectiveConfig.regEnd) : 0;
-    payload[`Sid${slot}`] = isSpecifiedServer ? sid : null;
+    payload[`Sid${slot}`] = isSpecifiedServer ? sid : [];
     const platforms = toPlatformNumberArray(effectiveConfig.platforms);
     const versions = toVersionNumberArray(effectiveConfig.versions);
-    payload[`Platform${slot}`] = platforms.length ? platforms : null;
-    payload[`Version${slot}`] = versions.length ? versions : null;
+    payload[`Platform${slot}`] = platforms.length ? platforms : [];
+    payload[`Version${slot}`] = versions.length ? versions : [];
   }
   return payload;
 }
