@@ -246,6 +246,10 @@ function validateRewardRows(rewards: MailRewardItem[], items: ItemOption[]) {
 
 const MAIL_DEFAULT_REG_BEGIN = "2020-01-01T00:00";
 const MAIL_DEFAULT_EXPIRE = "2050-12-31T23:59";
+const NOTICE_DEFAULT_IMAGE = "/notice/banner_1.png";
+const NOTICE_DEFAULT_REG_BEGIN = "2020-01-01T00:00";
+const NOTICE_DEFAULT_REG_END = "2050-12-31T23:59";
+const NOTICE_DEFAULT_PLATFORMS = "1,2";
 
 function defaultRegEndTime() {
   return toDatetimeLocal(new Date());
@@ -2118,7 +2122,7 @@ function MailSuitePage({ active, canUploadItemTable, postWithToken, session, set
             }
             if (matchedTargets.length < targets.length) {
               const removed = targets.filter((targetId) => !matchedTargets.includes(targetId));
-              setStatus(`已按条件过滤，排除了 ${removed.length} 个不符合条件的用户`);
+              setStatus(`已按条件过滤，跳过 ${removed.length} 个不符合条件的用户`);
             }
             serverBody.TargetID = matchedTargets;
             serverBody.RegtBegin = 0;
@@ -2467,7 +2471,9 @@ function MailEditor({ canUploadItemTable, global, initialMail, items, onBack, on
       setError(rewardValidation.message ?? "请填写有效的奖励道具和数量，或选择无奖励");
       return;
     }
-    const conditionRows = filterRows.filter((row) => isGlobalMail || row.field !== "server");
+    const conditionRows = filterRows
+      .filter((row) => isGlobalMail || row.field !== "server")
+      .map((row) => row.field === "regTime" ? row : { ...row, op: "=" });
     const versionList = conditionRows.filter((row) => row.field === "version").flatMap((row) => toVersionNumberArray(row.value));
     const platformList = conditionRows.filter((row) => row.field === "system").flatMap((row) => toPlatformNumberArray(row.value));
     const serverTargetIds = isGlobalMail ? filterRows.filter((row) => row.field === "server").flatMap((row) => toFlexibleNumberArray(row.value)) : [];
@@ -2485,7 +2491,7 @@ function MailEditor({ canUploadItemTable, global, initialMail, items, onBack, on
       return;
     }
     if (conditionRows.some((row) => row.field !== "regTime" && row.op !== "=" && row.value.trim())) {
-      setError("当前邮件接口只支持系统、版本、游戏内区服的等于条件，范围和排除条件暂不支持保存");
+      setError("当前邮件接口只支持系统、版本、游戏内区服的等于条件");
       return;
     }
     const emptyCondition = conditionRows.find((row) => ["system", "version", "server"].includes(row.field) && !row.value.trim());
@@ -2575,7 +2581,6 @@ function MailEditor({ canUploadItemTable, global, initialMail, items, onBack, on
               {filterRows.length === 0 && <div className="mail-condition-empty">默认无条件，邮件会发给当前类型下的全部目标。</div>}
               {filterRows.map((row) => {
                 const unsupported = row.field === "language" || row.field === "country";
-                const comparisonOps = row.field === "version" || row.field === "server";
                 return (
                   <div className="mail-condition-row" key={row.id}>
                     <select value={row.field} onChange={(event) => {
@@ -2585,21 +2590,18 @@ function MailEditor({ canUploadItemTable, global, initialMail, items, onBack, on
                     }}>
                       {filterFieldOptions.map((option) => <option disabled={option.disabled} key={option.value} value={option.value}>{option.label}</option>)}
                     </select>
-                    {row.field === "regTime" || comparisonOps ? (
+                    {row.field === "regTime" ? (
                       <select className="mail-condition-expression" value={row.op} onChange={(event) => {
                         const nextOp = event.target.value;
                         setFilterRows((current) => current.map((item) => item.id === row.id ? { ...item, op: nextOp, value: item.value || defaultFilterValue(item.field, nextOp) } : item));
                       }}>
-                        {comparisonOps && <option value="=">=</option>}
                         <option value=">=">&gt;=</option>
                         <option value="<=">&lt;=</option>
-                        {comparisonOps && <option value="!=">!=</option>}
                       </select>
                     ) : (
-                      <div className="mail-condition-op" role="group" aria-label="条件操作">
-                        <button className={row.op === "=" ? "active" : ""} onClick={() => setFilterRows((current) => current.map((item) => item.id === row.id ? { ...item, op: "=" } : item))} type="button">=</button>
-                        <button className={row.op === "!=" ? "active" : ""} onClick={() => setFilterRows((current) => current.map((item) => item.id === row.id ? { ...item, op: "!=" } : item))} type="button">排除</button>
-                      </div>
+                      <select className="mail-condition-expression" value="=" onChange={() => undefined}>
+                        <option value="=">=</option>
+                      </select>
                     )}
                     {row.field === "system" ? (
                       <select value={row.value} onChange={(event) => setFilterRows((current) => current.map((item) => item.id === row.id ? { ...item, value: event.target.value } : item))}>
@@ -3301,28 +3303,42 @@ function NoticePage({ postWithToken }: { postWithToken: (endpoint: string, body:
       setStatus(`公告保存失败：${incompleteLanguage} 的公告标题和公告内容需要同时填写`);
       return;
     }
-    const sidValues = toFlexibleNumberArray(form.sid);
-    if (Number(form.typ) === 1 && !sidValues.length) {
+    const effectiveForm = {
+      ...form,
+      imagePath: form.imagePath.trim() || NOTICE_DEFAULT_IMAGE,
+      typ: Number(form.typ) === 1 ? 1 : 0,
+      sid: Number(form.typ) === 1 ? form.sid : "",
+      regBegin: form.regBegin || NOTICE_DEFAULT_REG_BEGIN,
+      regEnd: form.regEnd || NOTICE_DEFAULT_REG_END,
+      platforms: form.platforms || NOTICE_DEFAULT_PLATFORMS,
+      versions: form.versions || "",
+    };
+    const sidValues = toFlexibleNumberArray(effectiveForm.sid);
+    if (Number(effectiveForm.typ) === 1 && !sidValues.length) {
       setStatus("公告保存失败：指定服务器未填写");
       return;
     }
-    if (form.regBegin && !parseDatetimeLocalSeconds(form.regBegin)) {
+    if (!parseDatetimeLocalSeconds(effectiveForm.regBegin)) {
       setStatus("公告保存失败：注册开始时间无效");
       return;
     }
-    if (form.regEnd && !parseDatetimeLocalSeconds(form.regEnd)) {
+    if (!parseDatetimeLocalSeconds(effectiveForm.regEnd)) {
       setStatus("公告保存失败：注册结束时间无效");
       return;
     }
-    if (form.platforms && !toPlatformNumberArray(form.platforms).length) {
+    if (parseDatetimeLocalSeconds(effectiveForm.regEnd) <= parseDatetimeLocalSeconds(effectiveForm.regBegin)) {
+      setStatus("公告保存失败：注册结束时间必须晚于注册开始时间");
+      return;
+    }
+    if (effectiveForm.platforms && !toPlatformNumberArray(effectiveForm.platforms).length) {
       setStatus("公告保存失败：平台请选择 GooglePlay 或 iOS");
       return;
     }
-    if (form.versions && !toVersionNumberArray(form.versions).length) {
+    if (effectiveForm.versions && !toVersionNumberArray(effectiveForm.versions).length) {
       setStatus("公告保存失败：版本请填写 x.x.x 或 x.x.x.x，例如 1.8.0.0");
       return;
     }
-    const normalizedForm = normalizeNotice({ ...form, title: primaryNoticeContent.title, body: primaryNoticeContent.body, contents: normalizedContents }, Number(form.slot) || 1);
+    const normalizedForm = normalizeNotice({ ...effectiveForm, title: primaryNoticeContent.title, body: primaryNoticeContent.body, contents: normalizedContents }, Number(effectiveForm.slot) || 1);
     setSaving(true);
     try {
       const merged = [1, 2, 3].map((slot) => normalizeNotice(slot === normalizedForm.slot ? normalizedForm : noticeDrafts.find((notice) => Number(notice.slot) === slot) ?? notices.find((notice) => Number(notice.slot) === slot) ?? emptyNotice(slot), slot));
@@ -3414,11 +3430,11 @@ function NoticePage({ postWithToken }: { postWithToken: (endpoint: string, body:
               <div className="notice-language-tabs">{languageDefinitions.map((language) => <button className={activeNoticeLanguage === language.label ? "active" : ""} key={language.id} onClick={() => setActiveNoticeLanguage(language.label)} type="button"><small>{language.id}</small>{language.label}</button>)}</div>
               <label>公告标题<input value={activeNoticeContent.title} onChange={(event) => updateNoticeContent({ title: event.target.value })} placeholder={`请输入${activeNoticeLanguage}公告标题`} /></label>
               <label>公告内容<textarea value={activeNoticeContent.body} onChange={(event) => updateNoticeContent({ body: event.target.value })} placeholder={`请输入${activeNoticeLanguage}公告内容`} /></label>
-              <label>配图路径<input value={form.imagePath} onChange={(event) => setForm({ ...form, imagePath: event.target.value })} placeholder="例如：/notice/banner_1.png" /></label>
+              <label>配图路径<input value={form.imagePath} onChange={(event) => setForm({ ...form, imagePath: event.target.value })} placeholder={`默认：${NOTICE_DEFAULT_IMAGE}`} /></label>
               <label>公告范围<select value={form.typ ?? 0} onChange={(event) => setForm({ ...form, typ: Number(event.target.value) })}><option value={0}>全部服务器</option><option value={1}>指定服务器</option></select></label>
               {Number(form.typ) === 1 && <label>指定服务器<input list="notice-server-options" value={form.sid ?? ""} onChange={(event) => setForm({ ...form, sid: event.target.value })} placeholder="例如 1 或 1,2" /><datalist id="notice-server-options">{serverOptions.map((server) => <option key={server.id} value={server.id}>{server.name}</option>)}</datalist></label>}
-              <label>注册开始<input type="datetime-local" value={form.regBegin ?? ""} onChange={(event) => setForm({ ...form, regBegin: event.target.value })} /></label>
-              <label>注册结束<input type="datetime-local" value={form.regEnd ?? ""} onChange={(event) => setForm({ ...form, regEnd: event.target.value })} /></label>
+              <label>注册开始<input type="datetime-local" value={form.regBegin ?? ""} onChange={(event) => setForm({ ...form, regBegin: event.target.value })} placeholder="默认：2020-01-01 00:00" /></label>
+              <label>注册结束<input type="datetime-local" value={form.regEnd ?? ""} onChange={(event) => setForm({ ...form, regEnd: event.target.value })} placeholder="默认：2050-12-31 23:59" /></label>
               <label>平台筛选<select value={form.platforms ?? ""} onChange={(event) => setForm({ ...form, platforms: event.target.value })}><option value="">全部平台</option><option value="1">GooglePlay</option><option value="2">iOS</option><option value="1,2">GooglePlay + iOS</option></select></label>
               <label>版本筛选<input value={form.versions ?? ""} onChange={(event) => setForm({ ...form, versions: event.target.value })} placeholder="例如 1.8.0.0；留空全部" /></label>
               {status && <div className="mail-form-error">{status}</div>}
@@ -3497,10 +3513,10 @@ function configsToNoticePayload(configs: NoticeConfig[]) {
     payload[`RegtBegin${slot}`] = config.regBegin ? parseDatetimeLocalSeconds(config.regBegin) : 0;
     payload[`RegtEnd${slot}`] = config.regEnd ? parseDatetimeLocalSeconds(config.regEnd) : 0;
     payload[`Sid${slot}`] = sid.length ? sid : null;
-    const platforms = toPlatformNumberArray(config.platforms);
+    const platforms = toPlatformNumberArray(config.platforms || NOTICE_DEFAULT_PLATFORMS);
     const versions = toVersionNumberArray(config.versions);
-    payload[`Platform${slot}`] = platforms.length ? platforms : null;
-    payload[`Version${slot}`] = versions.length ? versions : null;
+    payload[`Platform${slot}`] = platforms.length ? platforms : toPlatformNumberArray(NOTICE_DEFAULT_PLATFORMS);
+    payload[`Version${slot}`] = versions.length ? versions : [];
   }
   return payload;
 }
