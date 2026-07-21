@@ -251,20 +251,24 @@ function defaultRegEndTime() {
 }
 
 const languageDefinitions = [
-  { id: 1, label: "简体中文", code: "ChineseSimplified", aliases: ["中文(简体)", "简体中文", "ChineseSimplified"] },
-  { id: 2, label: "繁体中文", code: "ChineseTraditional", aliases: ["中文(繁体)", "繁体中文", "ChineseTraditional"] },
-  { id: 3, label: "英语", code: "English", aliases: ["英文", "英语", "English"] },
-  { id: 4, label: "日语", code: "Japanese", aliases: ["日文", "日语", "Japanese"] },
-  { id: 5, label: "韩语", code: "Korean", aliases: ["韩文", "韩语", "Korean"] },
-  { id: 6, label: "俄语", code: "Russian", aliases: ["俄语", "Russian"] },
-  { id: 7, label: "越南语", code: "Vietnamese", aliases: ["越南语", "Vietnamese"] },
-  { id: 8, label: "德语", code: "German", aliases: ["德语", "German"] },
+  { id: 1, label: "中文(简体)", code: "ChineseSimplified", aliases: ["中文(简体)", "简体中文", "ChineseSimplified"] },
+  { id: 2, label: "中文(繁体)", code: "ChineseTraditional", aliases: ["中文(繁体)", "繁体中文", "ChineseTraditional"] },
+  { id: 3, label: "英文", code: "English", aliases: ["英文", "英语", "English"] },
+  { id: 4, label: "韩文", code: "Korean", aliases: ["韩文", "韩语", "Korean"] },
+  { id: 5, label: "日文", code: "Japanese", aliases: ["日文", "日语", "Japanese"] },
+  { id: 6, label: "德语", code: "German", aliases: ["德语", "German"] },
+  { id: 7, label: "法语", code: "French", aliases: ["法语", "French"] },
+  { id: 8, label: "西班牙语", code: "Spanish", aliases: ["西班牙语", "Spanish"] },
   { id: 9, label: "葡萄牙语", code: "Portuguese", aliases: ["葡萄牙语", "Portuguese", "葡语"] },
-  { id: 10, label: "西班牙语", code: "Spanish", aliases: ["西班牙语", "Spanish"] },
-  { id: 11, label: "法语", code: "French", aliases: ["法语", "French"] },
+  { id: 10, label: "俄语", code: "Russian", aliases: ["俄语", "Russian"] },
+  { id: 11, label: "意大利语", code: "Italian", aliases: ["意大利语", "Italian"] },
+  { id: 12, label: "印尼语", code: "Indonesian", aliases: ["印尼语", "Indonesian"] },
+  { id: 13, label: "泰语", code: "Thai", aliases: ["泰语", "Thai"] },
+  { id: 14, label: "越南语", code: "Vietnamese", aliases: ["越南语", "Vietnamese"] },
 ];
 const mailLanguages = languageDefinitions.map((language) => language.label);
-const defaultMailLanguage = mailLanguages[0];
+const defaultLanguageDefinition = languageDefinitions.find((language) => language.id === 3) ?? languageDefinitions[0];
+const defaultMailLanguage = defaultLanguageDefinition.label;
 
 const portal = import.meta.env.VITE_GM_PORTAL === "prod" ? "prod" : "test";
 const portalGameConfig: GameConfig =
@@ -539,10 +543,20 @@ function multiLanguagePayload(contents?: Record<string, MailTemplateContent>) {
   const languages = languageContentList(contents);
   return {
     type: "multiLanguage",
-    defaultLanguageId: 1,
+    defaultLanguageId: defaultLanguageDefinition.id,
     languages,
     contents: Object.fromEntries(languages.map((language) => [language.language, { title: language.title, body: language.body }])),
   };
+}
+
+function mailLangListPayload(contents?: Record<string, MailTemplateContent>) {
+  return languageContentList(contents)
+    .filter((language) => language.id !== defaultLanguageDefinition.id && language.title.trim() && language.body.trim())
+    .map((language) => ({
+      Language: language.id,
+      Titel: language.title,
+      Body: language.body,
+    }));
 }
 
 async function parseMailTemplateFile(file: File) {
@@ -2532,8 +2546,9 @@ function MailEditor({ canUploadItemTable, global, initialMail, items, onBack, on
         SenderName: "GM",
         Titel: title,
         Body: body,
+        LangLst: selectedTemplateContents ? mailLangListPayload(selectedTemplateContents) : [],
         BodyData: [],
-        BodyData2: selectedTemplateContents ? [JSON.stringify(multiLanguagePayload(selectedTemplateContents))] : [],
+        BodyData2: [],
         ItemLst: rewardValidation.itemList,
         Platform: platformList,
         Version: versionList,
@@ -3393,28 +3408,19 @@ function noticePayloadToConfigs(data: Record<string, unknown> | null): NoticeCon
 
 function parseNoticeLanguageContents(data: Record<string, unknown> | null, slot: number, fallback: MailTemplateContent) {
   const normalized = normalizeLanguageContents(undefined, fallback);
-  const rawLanguageData = data?.[`Lang${slot}`] ?? data?.[`Languages${slot}`] ?? data?.[`Language${slot}`];
-  const rawBodyData = data?.[`BodyData${slot}`];
+  const rawLanguageData = data?.[`LangLst${slot}`] ?? data?.[`Lang${slot}`] ?? data?.[`Languages${slot}`] ?? data?.[`Language${slot}`];
   const titleList = getArray(data?.[`TitelLst${slot}`] ?? data?.[`TitleLst${slot}`]);
   const bodyList = getArray(data?.[`BodyLst${slot}`]);
   const applyRows = (rows: unknown[]) => {
     for (const row of rows) {
       const item = getObject(row);
       if (!item) continue;
-      const language = languageDefinitions.find((candidate) => Number(item.id ?? item.Id ?? item.LanguageId ?? item.languageId) === candidate.id) ?? matchLanguage(item.language ?? item.Language ?? item.code ?? item.Code);
+      const language = languageDefinitions.find((candidate) => Number(item.id ?? item.Id ?? item.Language ?? item.LanguageId ?? item.languageId) === candidate.id) ?? matchLanguage(item.language ?? item.Language ?? item.code ?? item.Code);
       if (!language) continue;
       normalized[language.label] = { title: String(item.title ?? item.Title ?? item.Titel ?? ""), body: String(item.body ?? item.Body ?? "") };
     }
   };
   if (Array.isArray(rawLanguageData)) applyRows(rawLanguageData);
-  if (Array.isArray(rawBodyData)) {
-    for (const value of rawBodyData) {
-      const parsed = typeof value === "string" ? parseJson(value) : value;
-      const payload = getObject(parsed);
-      const rows = getArray(payload?.languages ?? payload?.Languages);
-      if (rows.length) applyRows(rows);
-    }
-  }
   if (titleList.length || bodyList.length) {
     languageDefinitions.forEach((language, index) => {
       normalized[language.label] = { title: String(titleList[index] ?? normalized[language.label].title ?? ""), body: String(bodyList[index] ?? normalized[language.label].body ?? "") };
@@ -3430,15 +3436,10 @@ function configsToNoticePayload(configs: NoticeConfig[]) {
     const suffix = slot === 1 ? "" : String(slot);
     const contents = normalizeLanguageContents(config.contents, { title: config.title, body: config.body });
     const primary = contents[defaultMailLanguage].title && contents[defaultMailLanguage].body ? contents[defaultMailLanguage] : Object.values(contents).find((content) => content.title || content.body) ?? { title: "", body: "" };
-    const languages = languageContentList(contents);
-    payload[`TemplateName${slot}`] = config.templateName ?? "";
+    const langList = mailLangListPayload(contents);
     payload[`Titel${suffix}`] = primary.title ?? "";
     payload[`Body${suffix}`] = primary.body ?? "";
-    payload[`LangIdLst${slot}`] = languages.map((language) => language.id);
-    payload[`TitelLst${slot}`] = languages.map((language) => language.title);
-    payload[`BodyLst${slot}`] = languages.map((language) => language.body);
-    payload[`Lang${slot}`] = languages;
-    payload[`BodyData${slot}`] = [JSON.stringify({ ...multiLanguagePayload(contents), type: "multiLanguageNotice", templateName: config.templateName ?? "" })];
+    payload[`LangLst${slot}`] = langList;
     payload[`Rs${slot}`] = config.imagePath ?? "";
     const sid = toFlexibleNumberArray(config.sid);
     payload[`Typ${slot}`] = Number(config.typ) === 1 && sid.length ? 1 : 0;
