@@ -481,6 +481,46 @@ function toVersionNumberArray(value?: string) {
     });
 }
 
+function versionTextToCode(value: string) {
+  const text = value.trim();
+  if (!/^\d+(?:\.\d+){2,3}$/.test(text)) return null;
+  const parts = text.split(".").map((part) => Number(part));
+  if (!parts.every((part) => Number.isInteger(part) && part >= 0 && part <= 99)) return null;
+  return parts.reduce((total, part, index) => total + part * Math.pow(100, parts.length - index - 1), 0);
+}
+
+function toVersionConditionArray(rows: Array<{ field: string; op: string; value: string }>) {
+  const versionRows = rows.filter((row) => row.field === "version" && row.value.trim());
+  if (!versionRows.length) return [];
+  const exactRanges: number[] = [];
+  let minVersion = 0;
+  let maxVersion = Number.MAX_SAFE_INTEGER;
+  for (const row of versionRows) {
+    const codes = String(row.value ?? "")
+      .split(/[\s,，;；]+/)
+      .map((item) => versionTextToCode(item))
+      .filter((item): item is number => item !== null);
+    if (!codes.length) return [];
+    if (row.op === "=") {
+      exactRanges.push(...codes.flatMap((code) => [code, code * 100 + 1]));
+    } else if (row.op === ">=") {
+      minVersion = Math.max(minVersion, Math.min(...codes));
+    } else if (row.op === "<=") {
+      maxVersion = Math.min(maxVersion, Math.max(...codes) * 100 + 1);
+    }
+  }
+  const range = minVersion || maxVersion !== Number.MAX_SAFE_INTEGER ? [minVersion, maxVersion === Number.MAX_SAFE_INTEGER ? 4_294_967_295 : maxVersion] : [];
+  if (!exactRanges.length) return range;
+  if (!range.length) return exactRanges;
+  const intersected: number[] = [];
+  for (let index = 0; index < exactRanges.length; index += 2) {
+    const begin = Math.max(exactRanges[index], range[0]);
+    const end = Math.min(exactRanges[index + 1], range[1]);
+    if (end > begin) intersected.push(begin, end);
+  }
+  return intersected;
+}
+
 function versionCodeToText(value: unknown) {
   let code = Number(value);
   if (!Number.isFinite(code) || code < 0) return String(value ?? "");
@@ -752,11 +792,11 @@ function playerMatchesMailConditions(player: Record<string, unknown>, conditionR
       if (row.op === "!=" ? platforms.includes(platform) : !platforms.includes(platform)) return false;
     }
     if (row.field === "version") {
-      const versions = toVersionNumberArray(row.value);
+      const versions = toVersionConditionArray([row]);
       const version = parseFlexibleNumber(String(player.Version ?? player.AppVersion ?? player.Ver ?? ""));
       if (!versions.length || !Number.isFinite(version)) return false;
       const matched = versions.some((item, index) => index % 2 === 0 ? version >= item && version < (versions[index + 1] ?? item + 1) : false);
-      if (row.op === "!=" ? matched : !matched) return false;
+      if (!matched) return false;
     }
   }
   return true;
@@ -2443,6 +2483,28 @@ function formatPlatformList(value?: string) {
     .join(", ");
 }
 
+function serverConditionIds(rows: Array<{ field: string; op: string; value: string }>, serverOptions: ServerOption[]) {
+  const serverRows = rows.filter((row) => row.field === "server" && row.value.trim());
+  if (!serverRows.length) return [];
+  const allServerIds = serverOptions.map((server) => Number(server.id)).filter((id) => Number.isFinite(id)).sort((a, b) => a - b);
+  let selected = new Set(allServerIds);
+  for (const row of serverRows) {
+    const values = toFlexibleNumberArray(row.value);
+    if (!values.length) return [];
+    let rowIds: number[];
+    if (row.op === "=") {
+      rowIds = values;
+    } else {
+      if (!allServerIds.length) return [];
+      const boundary = row.op === ">=" ? Math.min(...values) : Math.max(...values);
+      rowIds = allServerIds.filter((serverId) => row.op === ">=" ? serverId >= boundary : serverId <= boundary);
+    }
+    const rowSet = new Set(rowIds);
+    selected = new Set([...selected].filter((serverId) => rowSet.has(serverId)));
+  }
+  return [...selected].sort((a, b) => a - b);
+}
+
 function MailEditor({ canUploadItemTable, global, initialMail, items, onBack, onSubmit, onUploadItemTable, rewardTemplates, serverOptions, templates }: { canUploadItemTable: boolean; global: boolean; initialMail?: Record<string, unknown>; items: ItemOption[]; onBack: () => void; onSubmit: (body: unknown) => Promise<string | void>; onUploadItemTable: (file: File) => Promise<void>; rewardTemplates: RewardTemplate[]; serverOptions: ServerOption[]; templates: MailTemplate[] }) {
   const now = new Date();
   const [mailType, setMailType] = React.useState(global ? "global" : "personal");
@@ -2520,12 +2582,10 @@ function MailEditor({ canUploadItemTable, global, initialMail, items, onBack, on
       setError(rewardValidation.message ?? "请填写有效的奖励道具和数量，或选择无奖励");
       return;
     }
-    const conditionRows = filterRows
-      .filter((row) => isGlobalMail || row.field !== "server")
-      .map((row) => row.field === "regTime" ? row : { ...row, op: "=" });
-    const versionList = conditionRows.filter((row) => row.field === "version").flatMap((row) => toVersionNumberArray(row.value));
+    const conditionRows = filterRows.filter((row) => isGlobalMail || row.field !== "server");
+    const versionList = toVersionConditionArray(conditionRows);
     const platformList = conditionRows.filter((row) => row.field === "system").flatMap((row) => toPlatformNumberArray(row.value));
-    const serverTargetIds = isGlobalMail ? filterRows.filter((row) => row.field === "server").flatMap((row) => toFlexibleNumberArray(row.value)) : [];
+    const serverTargetIds = isGlobalMail ? serverConditionIds(conditionRows, serverOptions) : [];
     const regBeginValues = conditionRows.filter((row) => row.field === "regTime" && row.op === ">=" && row.value).map((row) => parseDatetimeLocalSeconds(dateToDatetimeLocal(row.value)));
     const regEndValues = conditionRows.filter((row) => row.field === "regTime" && row.op === "<=" && row.value).map((row) => parseDatetimeLocalSeconds(dateToDatetimeLocal(row.value, true)));
     const hasRegCondition = conditionRows.some((row) => row.field === "regTime" && row.value.trim());
@@ -2539,8 +2599,8 @@ function MailEditor({ canUploadItemTable, global, initialMail, items, onBack, on
       setError("注册结束时间必须晚于注册开始时间");
       return;
     }
-    if (conditionRows.some((row) => row.field !== "regTime" && row.op !== "=" && row.value.trim())) {
-      setError("当前邮件接口只支持系统、版本、游戏内区服的等于条件");
+    if (conditionRows.some((row) => row.field === "system" && row.op !== "=" && row.value.trim())) {
+      setError("系统条件只支持等于");
       return;
     }
     const emptyCondition = conditionRows.find((row) => ["system", "version", "server"].includes(row.field) && !row.value.trim());
@@ -2549,7 +2609,7 @@ function MailEditor({ canUploadItemTable, global, initialMail, items, onBack, on
       setError(`${labels[emptyCondition.field] ?? "条件"}未填写`);
       return;
     }
-    if (conditionRows.some((row) => row.field === "version" && row.value.trim() && !toVersionNumberArray(row.value).length)) {
+    if (conditionRows.some((row) => row.field === "version" && row.value.trim() && !toVersionConditionArray([row]).length)) {
       setError("APP版本请填写 x.x.x 或 x.x.x.x 格式，例如 1.8.0.0");
       return;
     }
@@ -2557,8 +2617,12 @@ function MailEditor({ canUploadItemTable, global, initialMail, items, onBack, on
       setError("系统请选择 GooglePlay 或 iOS");
       return;
     }
-    if (isGlobalMail && filterRows.some((row) => row.field === "server" && row.value.trim()) && !serverTargetIds.length) {
-      setError("区服未填写");
+    if (isGlobalMail && conditionRows.some((row) => row.field === "server" && row.op !== "=" && row.value.trim()) && !serverOptions.length) {
+      setError("区服范围条件需要先获取到区服列表");
+      return;
+    }
+    if (isGlobalMail && conditionRows.some((row) => row.field === "server" && row.value.trim()) && !serverTargetIds.length) {
+      setError("没有符合条件的区服");
       return;
     }
     if (isGlobalMail && serverTargetIds.length && serverOptions.length) {
@@ -2639,11 +2703,12 @@ function MailEditor({ canUploadItemTable, global, initialMail, items, onBack, on
                     }}>
                       {filterFieldOptions.map((option) => <option disabled={option.disabled} key={option.value} value={option.value}>{option.label}</option>)}
                     </select>
-                    {row.field === "regTime" ? (
+                    {["regTime", "version", "server"].includes(row.field) ? (
                       <select className="mail-condition-expression" value={row.op} onChange={(event) => {
                         const nextOp = event.target.value;
                         setFilterRows((current) => current.map((item) => item.id === row.id ? { ...item, op: nextOp, value: item.value || defaultFilterValue(item.field, nextOp) } : item));
                       }}>
+                        {row.field !== "regTime" && <option value="=">=</option>}
                         <option value=">=">&gt;=</option>
                         <option value="<=">&lt;=</option>
                       </select>
