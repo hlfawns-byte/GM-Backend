@@ -18,6 +18,7 @@ migrateLegacyData(path.join(legacyDataRoot, portal), dataDir);
 
 const files = {
   accounts: path.join(dataDir, "accounts.json"),
+  adminLogin: path.join(dataDir, "admin-login.json"),
   adminCredentials: path.join(dataDir, "admin-credentials.json"),
   adminProfile: path.join(dataDir, "admin-profile.json"),
   games: path.join(dataDir, "games.json"),
@@ -171,6 +172,17 @@ function readAdminCredentials() {
 
 function writeAdminCredentials(credentials) {
   writeJson(files.adminCredentials, credentials);
+}
+
+function readAdminLogin() {
+  const parsed = readJson(files.adminLogin, null);
+  const account = String(parsed?.account ?? "").trim();
+  const password = String(parsed?.password ?? "").trim();
+  return account && password ? { account, password } : null;
+}
+
+function writeAdminLogin(credentials) {
+  writeJson(files.adminLogin, credentials);
 }
 
 function adminCredentialsFromEnv() {
@@ -343,7 +355,7 @@ async function handleLocalApi(req, res, pathname) {
       sendJson(res, 200, { profile: safeAccount });
       return true;
     }
-    sendJson(res, 200, { profile: readAdminProfile(account || readAdminCredentials()?.account || "admin") });
+    sendJson(res, 200, { profile: readAdminProfile(account || readAdminLogin()?.account || readAdminCredentials()?.account || "admin") });
     return true;
   }
 
@@ -375,20 +387,16 @@ async function handleLocalApi(req, res, pathname) {
       return true;
     }
     if (newPassword) {
-      const credentials = readAdminCredentials();
-      if (!credentials || credentials.account !== account) {
+      const adminLogin = readAdminLogin() ?? readAdminCredentials();
+      if (!adminLogin || adminLogin.account !== account) {
         sendJson(res, 404, { error: "admin account not found" });
         return true;
       }
-      if (adminCredentialsFromEnv()) {
-        sendJson(res, 400, { error: "admin password is configured by server environment variables, please update GM_ADMIN_PWD on the server" });
-        return true;
-      }
-      if (credentials.password !== oldPassword) {
+      if (adminLogin.password !== oldPassword) {
         sendJson(res, 403, { error: "old password is incorrect" });
         return true;
       }
-      writeAdminCredentials({ account: credentials.account, password: newPassword });
+      writeAdminLogin({ account: adminLogin.account, password: newPassword });
       const profile = { account, displayName, avatarUrl };
       writeAdminProfile(profile);
       sendJson(res, 200, { profile });
@@ -812,13 +820,28 @@ async function handleLocalApi(req, res, pathname) {
     const password = String(body.password ?? "").trim();
     const operator = body.operator;
     try {
-      const credentials = operator ? readAdminCredentials() : { account, password };
+      let credentials = operator ? readAdminCredentials() : null;
+      if (!operator) {
+        const adminLogin = readAdminLogin();
+        if (adminLogin) {
+          if (adminLogin.account !== account || adminLogin.password !== password) {
+            sendJson(res, 401, { error: "账号或密码错误" });
+            return true;
+          }
+          credentials = readAdminCredentials() ?? adminLogin;
+        } else {
+          credentials = { account, password };
+        }
+      }
       if (!credentials) {
         sendJson(res, 428, { error: "请先使用游戏服务端管理员账号登录一次，再让子账号登录" });
         return true;
       }
       const token = await loginToGameServer(body.serverUrl, credentials);
-      if (!operator) writeAdminCredentials({ account, password });
+      if (!operator && !readAdminLogin()) {
+        writeAdminCredentials({ account, password });
+        writeAdminLogin({ account, password });
+      }
       sendJson(res, 200, { token, adminAccount: credentials.account });
     } catch (error) {
       sendJson(res, 401, { error: error instanceof Error ? error.message : "登录失败" });
