@@ -1276,10 +1276,6 @@ function ProfilePanel({ auth, onClose, onSave }: { auth: AuthSession; onClose: (
       return;
     }
     if (oldPassword || newPassword || confirmPassword) {
-      if (auth.isRootAdmin) {
-        setStatus("admin 使用游戏服务端账号登录，密码请在游戏服务端侧维护");
-        return;
-      }
       if (!oldPassword) {
         setStatus("请输入原密码");
         return;
@@ -1322,13 +1318,9 @@ function ProfilePanel({ auth, onClose, onSave }: { auth: AuthSession; onClose: (
           <label>显示名称<input value={displayName} onChange={(event) => setDisplayName(event.target.value)} /></label>
           <div className="profile-password-block">
             <strong>修改密码</strong>
-            {auth.isRootAdmin ? <p>admin 使用游戏服务端账号登录，密码请在游戏服务端侧维护。</p> : (
-              <>
-                <label>原密码<input autoComplete="current-password" type="password" value={oldPassword} onChange={(event) => setOldPassword(event.target.value)} /></label>
-                <label>新密码<input autoComplete="new-password" type="password" value={newPassword} onChange={(event) => setNewPassword(event.target.value)} /></label>
-                <label>确认新密码<input autoComplete="new-password" type="password" value={confirmPassword} onChange={(event) => setConfirmPassword(event.target.value)} /></label>
-              </>
-            )}
+            <label>原密码<input autoComplete="current-password" type="password" value={oldPassword} onChange={(event) => setOldPassword(event.target.value)} /></label>
+            <label>新密码<input autoComplete="new-password" type="password" value={newPassword} onChange={(event) => setNewPassword(event.target.value)} /></label>
+            <label>确认新密码<input autoComplete="new-password" type="password" value={confirmPassword} onChange={(event) => setConfirmPassword(event.target.value)} /></label>
           </div>
           {status && <div className={status.includes("已保存") ? "profile-status success" : "profile-status"}>{status}</div>}
           <div className="profile-actions"><button disabled={saving} onClick={() => void submit()} type="button">{saving ? "保存中..." : "保存"}</button><button disabled={saving} onClick={onClose} type="button">取消</button></div>

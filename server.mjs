@@ -141,6 +141,10 @@ function writeAdminCredentials(credentials) {
   writeJson(files.adminCredentials, credentials);
 }
 
+function adminCredentialsFromEnv() {
+  return Boolean(process.env.GM_ADMIN_ACC?.trim() && process.env.GM_ADMIN_PWD?.trim());
+}
+
 function readScheduledMails() {
   const mails = readJson(files.scheduledMails, []);
   return Array.isArray(mails) ? mails : [];
@@ -339,7 +343,23 @@ async function handleLocalApi(req, res, pathname) {
       return true;
     }
     if (newPassword) {
-      sendJson(res, 400, { error: "admin 游戏服务端密码不能在后台修改" });
+      const credentials = readAdminCredentials();
+      if (!credentials || credentials.account !== account) {
+        sendJson(res, 404, { error: "admin account not found" });
+        return true;
+      }
+      if (adminCredentialsFromEnv()) {
+        sendJson(res, 400, { error: "admin password is configured by server environment variables, please update GM_ADMIN_PWD on the server" });
+        return true;
+      }
+      if (credentials.password !== oldPassword) {
+        sendJson(res, 403, { error: "old password is incorrect" });
+        return true;
+      }
+      writeAdminCredentials({ account: credentials.account, password: newPassword });
+      const profile = { account, displayName, avatarUrl };
+      writeAdminProfile(profile);
+      sendJson(res, 200, { profile });
       return true;
     }
     const profile = { account, displayName, avatarUrl };
