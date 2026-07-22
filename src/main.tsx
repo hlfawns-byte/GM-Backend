@@ -481,6 +481,39 @@ function toVersionNumberArray(value?: string) {
     });
 }
 
+function versionCodeToText(value: unknown) {
+  let code = Number(value);
+  if (!Number.isFinite(code) || code < 0) return String(value ?? "");
+  code = Math.floor(code);
+  if (code >= 100_000_000 && code % 100 === 1) code = Math.floor(code / 100);
+  const parts = [0, 0, 0, 0];
+  for (let index = 3; index >= 0; index -= 1) {
+    parts[index] = code % 100;
+    code = Math.floor(code / 100);
+  }
+  while (parts.length > 1 && parts[0] === 0) parts.shift();
+  return parts.join(".");
+}
+
+function formatVersionConditionList(values: unknown[]) {
+  const formatted: string[] = [];
+  for (let index = 0; index < values.length; index += 1) {
+    const current = Number(values[index]);
+    const next = Number(values[index + 1]);
+    if (Number.isFinite(current) && Number.isFinite(next) && next === current * 100 + 1) {
+      formatted.push(versionCodeToText(current));
+      index += 1;
+    } else {
+      formatted.push(versionCodeToText(values[index]));
+    }
+  }
+  return formatted;
+}
+
+function defaultMailRegEndDisplay() {
+  return formatBeijingTime(defaultRegEndTime());
+}
+
 function toPlatformNumberArray(value?: string) {
   return String(value ?? "")
     .split(/[\s,，;；]+/)
@@ -2257,14 +2290,14 @@ function MailListPage({ active, localMailRows, mailRows, onCreate, onDelete, onE
     if (!userIdQuery.trim()) return true;
     return formatCell(row.TargetID).includes(userIdQuery.trim());
   }).sort(compareMailRowsNewestFirst);
-  const listColumns = ["ID", "模板名称", "目标", "状态", "时间", "操作"];
+  const listColumns = ["ID", "邮件名称", "目标", "状态", "时间", "操作"];
 
   if (global && recordTab === "claim") {
     return (
       <section className="mail-page">
         <div className="mail-tabs"><button onClick={() => setRecordTab("mail")} type="button">全局邮件</button><button className="active" type="button">领取记录</button></div>
         <div className="mail-filter-line"><label>用户 ID：<input value={userIdQuery} onChange={(event) => setUserIdQuery(event.target.value)} /></label><button onClick={onRefresh} type="button"><Search size={14} />Search</button></div>
-        <MailDataTable columns={["邮件ID", "模板名称", "是否查看", "是否领取", "查看时间", "领取时间", "生效时间", "过期时间"]} rows={[]} />
+        <MailDataTable columns={["邮件ID", "邮件名称", "是否查看", "是否领取", "查看时间", "领取时间", "生效时间", "过期时间"]} rows={[]} />
       </section>
     );
   }
@@ -2288,15 +2321,16 @@ function MailListPage({ active, localMailRows, mailRows, onCreate, onDelete, onE
             const statusText = row.__scheduled
               ? row.__scheduledStatus === "failed" ? `定时失败：${formatCell(row.__scheduledError)}` : "待发送"
               : row.__claimed ? "已领取" : state > 0 ? `状态 ${state}` : "未领取";
-            const createdAt = formatCell(row.CreateTime ?? row.CreatedAt ?? row.Ct ?? row.createdAt);
+            const rawCreatedAt = row.CreateTime ?? row.CreatedAt ?? row.Ct ?? row.createdAt;
+            const createdAtFallback = row.__local || row.__scheduled ? formatTimestampValue(rawCreatedAt) : "暂无数据";
             const regEnd = row.RegtEnd ?? row.Regt;
             return {
               ID: <span className="mail-id-cell"><span>{id}</span><em>{typeName}</em></span>,
-              模板名称: title,
+              邮件名称: title,
               目标: <MailTargetSummary row={row} serverOptions={serverOptions} />,
               状态: statusText,
-              时间: <span className="mail-time-cell"><span>注册开始: {formatTimestamp(row.RegtBegin)}</span><span>注册结束: {formatTimestamp(regEnd)}</span><span>生效时间: {formatTimestamp(row.St)}</span><span>过期时间: {formatTimestamp(row.Et)}</span><span>创建时间: {formatTimestampValue(createdAt)}</span></span>,
-              操作: <div className="mail-action-buttons"><button onClick={() => onEdit(row)} type="button">编辑</button><button onClick={() => void onDelete(id)} type="button">撤回</button></div>,
+              时间: <span className="mail-time-cell"><span>注册开始: {formatMailListTime(row.RegtBegin, "2020-01-01 00:00")}</span><span>注册结束: {formatMailListTime(regEnd, defaultMailRegEndDisplay())}</span><span>生效时间: {formatMailListTime(row.St, "立即生效")}</span><span>过期时间: {formatMailListTime(row.Et, "2050-12-31 23:59")}</span><span>创建时间: {formatMailListTime(rawCreatedAt, createdAtFallback)}</span></span>,
+              操作: <div className="mail-action-buttons"><button disabled title="邮件编辑功能暂时关闭" type="button">编辑</button><button onClick={() => void onDelete(id)} type="button">撤回</button></div>,
             };
           })}
         />
@@ -2355,7 +2389,7 @@ function MailTargetSummary({ row, serverOptions }: { row: Record<string, unknown
       ? "未填写用户"
       : "全服";
   const platforms = getArray(row.Platform).map((item) => Number(item)).filter((item) => item === 1 || item === 2);
-  const versions = getArray(row.Version).map((item) => String(item)).filter(Boolean);
+  const versions = formatVersionConditionList(getArray(row.Version)).filter(Boolean);
   const regBegin = Number(row.RegtBegin);
   const regEnd = Number(row.RegtEnd ?? row.Regt);
   const tags = [
@@ -3164,6 +3198,11 @@ function formatTimestampValue(value: unknown) {
     return value.replace("T", " ").slice(0, 16);
   }
   return formatTimestamp(value);
+}
+
+function formatMailListTime(value: unknown, fallback: string) {
+  const formatted = typeof value === "string" && /^\d{4}-\d{2}-\d{2}/.test(value) ? formatTimestampValue(value) : formatTimestamp(value);
+  return formatted === "暂无数据" ? fallback : formatted;
 }
 
 function formatTimestamp(value: unknown) {
