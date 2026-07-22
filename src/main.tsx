@@ -256,6 +256,9 @@ function validateRewardRows(rewards: MailRewardItem[], items: ItemOption[]) {
 
 const MAIL_DEFAULT_REG_BEGIN = "2020-01-01T00:00";
 const MAIL_DEFAULT_EXPIRE = "2050-12-31T23:59";
+const NOTICE_DEFAULT_REG_BEGIN = "2020-01-01T00:00";
+const NOTICE_DEFAULT_REG_END = "2050-12-31T23:59";
+const NOTICE_DEFAULT_VERSION_RANGE = "0,4294967295";
 const NOTICE_DEFAULT_IMAGE = "notice_bg_1";
 
 function defaultRegEndTime() {
@@ -3435,7 +3438,7 @@ function noticeConditionsFromFields(notice: Partial<NoticeConfig>): ConditionRow
 }
 
 function noticeDefaultConditionValue(field: string, op = "=") {
-  if (field === "regTime") return op === "<=" ? defaultRegEndTime() : MAIL_DEFAULT_REG_BEGIN;
+  if (field === "regTime") return op === "<=" ? NOTICE_DEFAULT_REG_END : NOTICE_DEFAULT_REG_BEGIN;
   return "";
 }
 
@@ -3532,8 +3535,8 @@ function NoticePage({ postWithToken }: { postWithToken: (endpoint: string, body:
     const sidValues = serverConditionIds(conditionRows, serverOptions);
     const regBeginValues = conditionRows.filter((row) => row.field === "regTime" && row.op === ">=" && row.value).map((row) => parseDatetimeLocalSeconds(dateToDatetimeLocal(row.value)));
     const regEndValues = conditionRows.filter((row) => row.field === "regTime" && row.op === "<=" && row.value).map((row) => parseDatetimeLocalSeconds(dateToDatetimeLocal(row.value, true)));
-    const regBeginSeconds = regBeginValues.length ? Math.max(...regBeginValues) : 0;
-    const regEndSeconds = regEndValues.length ? Math.min(...regEndValues) : 0;
+    const regBeginSeconds = regBeginValues.length ? Math.max(...regBeginValues) : parseDatetimeLocalSeconds(NOTICE_DEFAULT_REG_BEGIN);
+    const regEndSeconds = regEndValues.length ? Math.min(...regEndValues) : parseDatetimeLocalSeconds(NOTICE_DEFAULT_REG_END);
     if (conditionRows.some((row) => row.field === "system" && row.op !== "=" && row.value.trim())) {
       setStatus("公告保存失败：系统条件只支持等于");
       return;
@@ -3573,10 +3576,10 @@ function NoticePage({ postWithToken }: { postWithToken: (endpoint: string, body:
       imagePath: form.imagePath.trim() || NOTICE_DEFAULT_IMAGE,
       typ: sidValues.length ? 1 : 0,
       sid: sidValues.join(","),
-      regBegin: regBeginSeconds ? secondsToDatetimeLocal(regBeginSeconds) : "",
-      regEnd: regEndSeconds ? secondsToDatetimeLocal(regEndSeconds) : "",
-      platforms: platformList.join(","),
-      versions: versionList.join(","),
+      regBegin: secondsToDatetimeLocal(regBeginSeconds),
+      regEnd: secondsToDatetimeLocal(regEndSeconds),
+      platforms: platformList.length ? platformList.join(",") : "1,2",
+      versions: versionList.length ? versionList.join(",") : NOTICE_DEFAULT_VERSION_RANGE,
       conditions: conditionRows,
     };
     const normalizedForm = normalizeNotice({ ...effectiveForm, title: primaryNoticeContent.title, body: primaryNoticeContent.body, contents: normalizedContents }, Number(effectiveForm.slot) || 1);
@@ -3808,10 +3811,10 @@ function configsToNoticePayload(configs: NoticeConfig[]) {
     const effectiveConfig = {
       ...config,
       imagePath: config.imagePath?.trim() || NOTICE_DEFAULT_IMAGE,
-      regBegin: config.regBegin || "",
-      regEnd: config.regEnd || "",
-      platforms: config.platforms || "",
-      versions: config.versions || "",
+      regBegin: config.regBegin || NOTICE_DEFAULT_REG_BEGIN,
+      regEnd: config.regEnd || NOTICE_DEFAULT_REG_END,
+      platforms: config.platforms || "1,2",
+      versions: config.versions || NOTICE_DEFAULT_VERSION_RANGE,
     };
     const contents = fillMissingLanguageContents(effectiveConfig.contents, { title: effectiveConfig.title, body: effectiveConfig.body });
     const primary = contents[defaultMailLanguage].title && contents[defaultMailLanguage].body ? contents[defaultMailLanguage] : Object.values(contents).find((content) => content.title || content.body) ?? { title: "", body: "" };
