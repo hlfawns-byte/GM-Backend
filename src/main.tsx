@@ -1054,7 +1054,11 @@ function App() {
   };
 
   const deleteAccount = async (accountId: number) => {
-    await fetch(`/local-api/accounts/${accountId}`, { method: "DELETE" });
+    const response = await fetch(`/local-api/accounts/${accountId}`, { method: "DELETE" });
+    if (!response.ok) {
+      const payload = (await response.json().catch(() => ({}))) as { error?: string };
+      throw new Error(payload.error || "删除账号失败");
+    }
     await refreshAccounts();
     void writeUserLog({ action: "删除账号", target: String(accountId) });
   };
@@ -1082,7 +1086,11 @@ function App() {
   };
 
   const deleteGame = async (gameId: number) => {
-    await fetch(`/local-api/games/${gameId}`, { method: "DELETE" });
+    const response = await fetch(`/local-api/games/${gameId}`, { method: "DELETE" });
+    if (!response.ok) {
+      const payload = (await response.json().catch(() => ({}))) as { error?: string };
+      throw new Error(payload.error || "删除区服失败");
+    }
     await refreshGames();
     await refreshAccounts();
     void writeUserLog({ action: "删除游戏区服", target: String(gameId) });
@@ -2391,6 +2399,7 @@ function MailSuitePage({ active, canUploadItemTable, postWithToken, session, set
       recordTab={recordTab}
       setRecordTab={setRecordTab}
       status={status}
+      onClearStatus={() => setStatus("")}
       userIdQuery={userIdQuery}
       setUserIdQuery={setUserIdQuery}
       onCreate={() => { setEditingMailRow(undefined); setView("edit"); }}
@@ -2419,7 +2428,7 @@ function MailSuitePage({ active, canUploadItemTable, postWithToken, session, set
   );
 }
 
-function MailListPage({ active, localMailRows, mailRows, onCreate, onDelete, onEdit, onRefresh, recordTab, serverOptions, setRecordTab, setUserIdQuery, status, userIdQuery }: { active: MailSectionKey; localMailRows: Record<string, unknown>[]; mailRows: Record<string, unknown>[]; onCreate: () => void; onDelete: (id: string) => Promise<void>; onEdit: (row: Record<string, unknown>) => void; onRefresh: () => void; recordTab: "mail" | "claim"; serverOptions: ServerOption[]; setRecordTab: (tab: "mail" | "claim") => void; setUserIdQuery: (value: string) => void; status: string; userIdQuery: string }) {
+function MailListPage({ active, localMailRows, mailRows, onClearStatus, onCreate, onDelete, onEdit, onRefresh, recordTab, serverOptions, setRecordTab, setUserIdQuery, status, userIdQuery }: { active: MailSectionKey; localMailRows: Record<string, unknown>[]; mailRows: Record<string, unknown>[]; onClearStatus: () => void; onCreate: () => void; onDelete: (id: string) => Promise<void>; onEdit: (row: Record<string, unknown>) => void; onRefresh: () => void; recordTab: "mail" | "claim"; serverOptions: ServerOption[]; setRecordTab: (tab: "mail" | "claim") => void; setUserIdQuery: (value: string) => void; status: string; userIdQuery: string }) {
   const global = active === "mailGlobal";
   const mergedRows = [...localMailRows, ...mailRows.filter((row) => !localMailRows.some((localRow) => String(localRow.Id) === String(row.Id)))];
   const rows = mergedRows.filter((row) => {
@@ -2477,7 +2486,7 @@ function MailListPage({ active, localMailRows, mailRows, onCreate, onDelete, onE
           })}
         />
       </section>
-      {status && <div className="mail-status">{status}</div>}
+      <TransientToast kind={status.includes("失败") || status.includes("错误") ? "error" : "success"} message={status} onClose={onClearStatus} />
     </section>
   );
 }
@@ -3172,7 +3181,7 @@ function GiftSuitePage({ active, canUploadItemTable, postWithToken }: { active: 
           })}
         />
       </section>
-      {status && <div className="mail-status">{status}</div>}
+      <TransientToast kind={status.includes("失败") || status.includes("错误") ? "error" : "success"} message={status} onClose={() => setStatus("")} />
     </section>
   );
 }
@@ -3426,6 +3435,16 @@ function UnavailablePanel({ module }: { module: ModuleConfig }) {
   return <section className="unavailable-panel"><module.icon size={34} /><strong>{module.title}暂未开放</strong><p>{module.description}</p></section>;
 }
 
+function TransientToast({ kind = "info", message, onClose }: { kind?: "info" | "success" | "error"; message: string; onClose: () => void }) {
+  React.useEffect(() => {
+    if (!message) return undefined;
+    const timer = window.setTimeout(onClose, 2400);
+    return () => window.clearTimeout(timer);
+  }, [message, onClose]);
+  if (!message) return null;
+  return <div className={`transient-toast ${kind}`} role="status">{message}</div>;
+}
+
 function noticeConditionsFromFields(notice: Partial<NoticeConfig>): ConditionRow[] {
   const rows: ConditionRow[] = [];
   let id = 1;
@@ -3663,7 +3682,7 @@ function NoticePage({ postWithToken }: { postWithToken: (endpoint: string, body:
           );
         })}
       </div>
-      {status && <div className="mail-status">{status}</div>}
+      <TransientToast kind={status.includes("失败") || status.includes("错误") ? "error" : "success"} message={status} onClose={() => setStatus("")} />
       {editing && (
         <div className="modal-backdrop" role="presentation">
           <section className="notice-modal" role="dialog" aria-modal="true">
@@ -3844,6 +3863,7 @@ function AccountPanel({ accounts, canManageAdmins, games, session, onAdd, onDele
   const [form, setForm] = React.useState(emptyForm);
   const [editingAccount, setEditingAccount] = React.useState<ManagedAccount | null>(null);
   const [formError, setFormError] = React.useState("");
+  const [formSuccess, setFormSuccess] = React.useState("");
   const gameOptions = React.useMemo(() => games.map((game) => ({ label: `${game.name} / ${game.serverName}`, value: `${game.name}/${game.serverName}` })), [games]);
   const beginEdit = (account: ManagedAccount) => {
     setEditingAccount(account);
@@ -3857,11 +3877,13 @@ function AccountPanel({ accounts, canManageAdmins, games, session, onAdd, onDele
       isManager: Boolean(account.isManager),
     });
     setFormError("");
+    setFormSuccess("");
   };
   const resetForm = () => {
     setEditingAccount(null);
     setForm(emptyForm);
     setFormError("");
+    setFormSuccess("");
   };
 
   React.useEffect(() => {
@@ -3881,15 +3903,19 @@ function AccountPanel({ accounts, canManageAdmins, games, session, onAdd, onDele
             event.preventDefault();
             try {
               setFormError("");
+              setFormSuccess("");
               const payload = { id: editingAccount?.id ?? Date.now(), account: form.account, password: form.password, displayName: form.displayName || form.account, role: form.role, games: form.isManager ? gameOptions.map((game) => game.value) : form.gameKeys, permissions: form.permissions, isManager: canManageAdmins && form.isManager, status: editingAccount?.status ?? "启用" };
               if (editingAccount) {
                 await onUpdate(payload);
                 resetForm();
+                setFormSuccess("账号修改成功");
               } else {
                 await onAdd(payload);
                 setForm((current) => ({ ...current, account: "", password: "", displayName: "", gameKeys: [currentGameKey], isManager: false }));
+                setFormSuccess("账号创建成功");
               }
             } catch (error) {
+              setFormSuccess("");
               setFormError(error instanceof Error ? error.message : editingAccount ? "保存账号失败" : "创建账号失败");
             }
           }}>
@@ -3904,13 +3930,24 @@ function AccountPanel({ accounts, canManageAdmins, games, session, onAdd, onDele
               <button className="primary-button" type="submit"><Plus size={15} />{editingAccount ? "保存修改" : "创建账号"}</button>
               {editingAccount && <button onClick={resetForm} type="button">取消编辑</button>}
             </div>
-            {formError && <div className="form-error">{formError}</div>}
+            <TransientToast kind="success" message={formSuccess} onClose={() => setFormSuccess("")} />
+            <TransientToast kind="error" message={formError} onClose={() => setFormError("")} />
           </form>
           <div className="managed-list account-managed-list">{accounts.length === 0 ? <div className="empty-table"><strong>暂无子账号</strong><span>请在左侧创建账号给其他人使用。</span></div> : accounts.map((account) => (
             <article className="managed-account account-managed-item" key={account.id}>
               <div><strong>{account.displayName}</strong><span>{account.account} / {account.role}{account.isManager ? " / 后台管理员" : ""}</span></div>
               <div className="tag-row">{account.isManager ? <small>全部游戏</small> : account.games.map((item) => <small key={item}>{item}</small>)}{account.permissions.slice(0, 3).map((item) => <small key={item}>{item}</small>)}</div>
-              <div className="managed-actions"><button onClick={() => beginEdit(account)} type="button"><UserCog size={14} />编辑</button>{canManageAdmins ? <button onClick={() => void onDelete(account.id)} type="button"><Trash2 size={14} />删除</button> : <button disabled type="button"><Trash2 size={14} />仅admin可删</button>}</div>
+              <div className="managed-actions"><button onClick={() => beginEdit(account)} type="button"><UserCog size={14} />编辑</button>{canManageAdmins ? <button onClick={async () => {
+                try {
+                  setFormError("");
+                  setFormSuccess("");
+                  await onDelete(account.id);
+                  setFormSuccess("账号删除成功");
+                } catch (error) {
+                  setFormSuccess("");
+                  setFormError(error instanceof Error ? error.message : "删除账号失败");
+                }
+              }} type="button"><Trash2 size={14} />删除</button> : <button disabled type="button"><Trash2 size={14} />仅admin可删</button>}</div>
             </article>
           ))}</div>
         </div>
@@ -4027,10 +4064,12 @@ function GamePanel({ games, onAdd, onDelete, onUpdate, onClose }: { games: GameC
   const [form, setForm] = React.useState<GameConfig>(emptyForm);
   const [editingId, setEditingId] = React.useState<number | null>(null);
   const [formError, setFormError] = React.useState("");
+  const [formSuccess, setFormSuccess] = React.useState("");
   const loadImage = (file: File | undefined, key: "iconUrl" | "backgroundUrl") => {
     if (!file) return;
     if (!file.type.startsWith("image/")) {
       setFormError("请上传图片文件");
+      setFormSuccess("");
       return;
     }
     const reader = new FileReader();
@@ -4041,11 +4080,13 @@ function GamePanel({ games, onAdd, onDelete, onUpdate, onClose }: { games: GameC
     setEditingId(null);
     setForm(emptyForm);
     setFormError("");
+    setFormSuccess("");
   };
   const beginEdit = (game: GameConfig) => {
     setEditingId(game.id ?? null);
     setForm({ ...emptyForm, ...game, iconUrl: game.iconUrl ?? "", backgroundUrl: game.backgroundUrl ?? "" });
     setFormError("");
+    setFormSuccess("");
   };
 
   return (
@@ -4057,6 +4098,7 @@ function GamePanel({ games, onAdd, onDelete, onUpdate, onClose }: { games: GameC
             event.preventDefault();
             try {
               setFormError("");
+              setFormSuccess("");
               if (!form.serverAccount?.trim() || !form.serverPassword?.trim()) {
                 setFormError("请填写该区服的服务端账号和密码");
                 return;
@@ -4064,11 +4106,14 @@ function GamePanel({ games, onAdd, onDelete, onUpdate, onClose }: { games: GameC
               if (editingId) {
                 await onUpdate({ ...form, id: editingId });
                 resetForm();
+                setFormSuccess("区服修改成功");
               } else {
                 await onAdd(form);
                 setForm((current) => ({ ...emptyForm, name: current.name }));
+                setFormSuccess("区服新增成功");
               }
             } catch (error) {
+              setFormSuccess("");
               setFormError(error instanceof Error ? error.message : editingId ? "保存区服失败" : "新增区服失败");
             }
           }}>
@@ -4089,13 +4134,25 @@ function GamePanel({ games, onAdd, onDelete, onUpdate, onClose }: { games: GameC
               <button className="primary-button" type="submit"><Plus size={15} />{editingId ? "保存修改" : "新增区服"}</button>
               {editingId && <button onClick={resetForm} type="button">取消编辑</button>}
             </div>
-            {formError && <div className="form-error">{formError}</div>}
+            <TransientToast kind="success" message={formSuccess} onClose={() => setFormSuccess("")} />
+            <TransientToast kind="error" message={formError} onClose={() => setFormError("")} />
           </form>
           <div className="managed-list">{games.length === 0 ? <div className="empty-table"><strong>暂无游戏区服</strong><span>请在左侧新增。</span></div> : games.map((game) => (
             <article className="managed-account" key={game.id ?? `${game.name}/${game.serverName}`}>
               <div><strong>{game.name} / {game.serverName}</strong><span>{game.serverAccount ? "已配置服务端账号" : "使用默认服务端账号"}</span></div>
               <div className="tag-row"><small>{game.serverUrl}</small><small>{game.iconUrl ? "已上传Icon" : "未上传Icon"}</small>{game.backgroundUrl && <small>已上传背景</small>}</div>
-              <div className="managed-actions"><button onClick={() => beginEdit(game)} type="button"><UserCog size={14} />编辑</button><button onClick={() => game.id && void onDelete(game.id)} type="button"><Trash2 size={14} />删除</button></div>
+              <div className="managed-actions"><button onClick={() => beginEdit(game)} type="button"><UserCog size={14} />编辑</button><button onClick={async () => {
+                if (!game.id) return;
+                try {
+                  setFormError("");
+                  setFormSuccess("");
+                  await onDelete(game.id);
+                  setFormSuccess("区服删除成功");
+                } catch (error) {
+                  setFormSuccess("");
+                  setFormError(error instanceof Error ? error.message : "删除区服失败");
+                }
+              }} type="button"><Trash2 size={14} />删除</button></div>
             </article>
           ))}</div>
         </div>
