@@ -270,6 +270,7 @@ const languageDefinitions = [
 const mailLanguages = languageDefinitions.map((language) => language.label);
 const defaultLanguageDefinition = languageDefinitions.find((language) => language.id === 3) ?? languageDefinitions[0];
 const defaultMailLanguage = defaultLanguageDefinition.label;
+const templateExportLanguages = [defaultLanguageDefinition, ...languageDefinitions.filter((language) => language.id !== defaultLanguageDefinition.id)];
 
 const portal = import.meta.env.VITE_GM_PORTAL === "prod" ? "prod" : "test";
 const portalGameConfig: GameConfig =
@@ -661,6 +662,21 @@ async function parseMailTemplateFile(file: File) {
   const rows = XLSX.utils.sheet_to_json<unknown[]>(sheet, { header: 1, defval: "" });
   const usefulRows = rows.filter((row) => row.some((cell) => stringFromCell(cell)));
   if (!usefulRows.length) throw new Error("模板文件没有内容");
+  const contents = Object.fromEntries(mailLanguages.map((language) => [language, { title: "", body: "" }])) as Record<string, MailTemplateContent>;
+  const threeRowLanguages = usefulRows[0] ?? [];
+  const threeRowTitles = usefulRows[1] ?? [];
+  const threeRowBodies = usefulRows[2] ?? [];
+  const threeRowLanguageMatches = threeRowLanguages
+    .map((cell, index) => ({ language: matchLanguage(cell)?.label, index }))
+    .filter((item): item is { language: string; index: number } => Boolean(item.language));
+  if (threeRowLanguageMatches.length >= 2 && (stringFromCell(threeRowTitles[0]).toLowerCase() === "title" || stringFromCell(threeRowBodies[0]).toLowerCase() === "desc")) {
+    for (const item of threeRowLanguageMatches) {
+      contents[item.language] = { title: stringFromCell(threeRowTitles[item.index]), body: stringFromCell(threeRowBodies[item.index]) };
+    }
+    if (!Object.values(contents).some((content) => content.title || content.body)) throw new Error("模板文件没有邮件标题或邮件内容");
+    const primary = contents[defaultMailLanguage].title || contents[defaultMailLanguage].body ? contents[defaultMailLanguage] : Object.values(contents).find((content) => content.title || content.body) ?? { title: "", body: "" };
+    return { name: "", title: primary.title, body: primary.body, contents };
+  }
   const headerIndex = usefulRows.findIndex((row) => row.some((cell) => /标题|title/i.test(stringFromCell(cell))) && row.some((cell) => /内容|body|content/i.test(stringFromCell(cell))));
   const headers = headerIndex >= 0 ? usefulRows[headerIndex].map(stringFromCell) : [];
   const dataRows = usefulRows.slice(headerIndex >= 0 ? headerIndex + 1 : 0);
@@ -672,7 +688,6 @@ async function parseMailTemplateFile(file: File) {
   const titleColumn = findColumn([/标题/, /^title$/i], 0);
   const bodyColumn = findColumn([/内容/, /^body$/i, /^content$/i], titleColumn === 0 ? 1 : 0);
   const nameColumn = findColumn([/模板/, /^name$/i], -1);
-  const contents = Object.fromEntries(mailLanguages.map((language) => [language, { title: "", body: "" }])) as Record<string, MailTemplateContent>;
   if (languageColumn >= 0) {
     for (const item of dataRows) {
       const language = matchLanguage(item[languageColumn])?.label;
@@ -1426,15 +1441,24 @@ function GameSelectScreen({ auth, games, onEnter, onLogout, onManageAccounts, on
   const [error, setError] = React.useState("");
   const [entering, setEntering] = React.useState("");
   const [orderedGames, setOrderedGames] = React.useState<GameConfig[]>([]);
-  const [draggingId, setDraggingId] = React.useState<number | null>(null);
-  const [pressingId, setPressingId] = React.useState<number | null>(null);
+  const [draggingName, setDraggingName] = React.useState<string | null>(null);
+  const [pressingName, setPressingName] = React.useState<string | null>(null);
   const allowedGames = React.useMemo(() => games.filter((game) => auth.isAdmin || auth.games.includes(`${game.name}/${game.serverName}`)), [auth.games, auth.isAdmin, games]);
   const allowedSignature = React.useMemo(() => allowedGames.map((game) => game.id ?? `${game.name}/${game.serverName}`).join("|"), [allowedGames]);
   const pressTimerRef = React.useRef<number | null>(null);
-  const draggedIdRef = React.useRef<number | null>(null);
+  const draggedNameRef = React.useRef<string | null>(null);
   const dragMovedRef = React.useRef(false);
   const suppressClickRef = React.useRef(false);
   const latestOrderRef = React.useRef<GameConfig[]>(allowedGames);
+  const gameGroups = React.useMemo(() => {
+    const groups: Array<{ name: string; games: GameConfig[] }> = [];
+    for (const game of orderedGames) {
+      const group = groups.find((item) => item.name === game.name);
+      if (group) group.games.push(game);
+      else groups.push({ name: game.name, games: [game] });
+    }
+    return groups;
+  }, [orderedGames]);
 
   React.useEffect(() => {
     setOrderedGames(allowedGames);
@@ -1448,52 +1472,59 @@ function GameSelectScreen({ auth, games, onEnter, onLogout, onManageAccounts, on
     }
   };
 
-  const beginPress = (event: React.PointerEvent<HTMLButtonElement>, game: GameConfig) => {
-    if (!game.id || entering) return;
-    const button = event.currentTarget;
+  const beginPress = (event: React.PointerEvent<HTMLElement>, gameName: string) => {
+    if (entering) return;
+    const card = event.currentTarget;
     const pointerId = event.pointerId;
     clearPressTimer();
-    setPressingId(game.id);
+    setPressingName(gameName);
     pressTimerRef.current = window.setTimeout(() => {
-      draggedIdRef.current = game.id ?? null;
+      draggedNameRef.current = gameName;
       dragMovedRef.current = false;
       suppressClickRef.current = true;
-      setDraggingId(game.id ?? null);
-      setPressingId(null);
-      button.setPointerCapture(pointerId);
+      setDraggingName(gameName);
+      setPressingName(null);
+      card.setPointerCapture(pointerId);
     }, 420);
   };
 
-  const moveDraggedGame = (targetId: number) => {
-    const sourceId = draggedIdRef.current;
-    if (!sourceId || sourceId === targetId) return;
+  const moveDraggedGameGroup = (targetName: string) => {
+    const sourceName = draggedNameRef.current;
+    if (!sourceName || sourceName === targetName) return;
     setOrderedGames((current) => {
-      const fromIndex = current.findIndex((game) => game.id === sourceId);
-      const toIndex = current.findIndex((game) => game.id === targetId);
+      const currentGroups: Array<{ name: string; games: GameConfig[] }> = [];
+      for (const game of current) {
+        const group = currentGroups.find((item) => item.name === game.name);
+        if (group) group.games.push(game);
+        else currentGroups.push({ name: game.name, games: [game] });
+      }
+      const fromIndex = currentGroups.findIndex((group) => group.name === sourceName);
+      const toIndex = currentGroups.findIndex((group) => group.name === targetName);
       if (fromIndex < 0 || toIndex < 0 || fromIndex === toIndex) return current;
-      const next = [...current];
-      const [moved] = next.splice(fromIndex, 1);
-      next.splice(toIndex, 0, moved);
+      const nextGroups = [...currentGroups];
+      const [moved] = nextGroups.splice(fromIndex, 1);
+      nextGroups.splice(toIndex, 0, moved);
+      const next = nextGroups.flatMap((group) => group.games);
       latestOrderRef.current = next;
       dragMovedRef.current = true;
       return next;
     });
   };
 
-  const continueDrag = (event: React.PointerEvent<HTMLButtonElement>) => {
-    if (!draggedIdRef.current) return;
+  const continueDrag = (event: React.PointerEvent<HTMLElement>) => {
+    if (!draggedNameRef.current) return;
     event.preventDefault();
-    const target = document.elementFromPoint(event.clientX, event.clientY)?.closest("[data-game-id]");
-    const targetId = Number(target?.getAttribute("data-game-id"));
-    if (Number.isFinite(targetId)) moveDraggedGame(targetId);
+    const target = document.elementFromPoint(event.clientX, event.clientY)?.closest("[data-game-name]");
+    const targetName = target?.getAttribute("data-game-name") ?? "";
+    if (targetName) moveDraggedGameGroup(targetName);
   };
 
-  const finishDrag = async (event?: React.PointerEvent<HTMLButtonElement>) => {
+  const finishDrag = async (event?: React.PointerEvent<HTMLElement>) => {
     clearPressTimer();
-    setPressingId(null);
-    const draggedId = draggedIdRef.current;
-    draggedIdRef.current = null;
-    setDraggingId(null);
+    setPressingName(null);
+    const draggedName = draggedNameRef.current;
+    draggedNameRef.current = null;
+    setDraggingName(null);
     try {
       if (event?.currentTarget.hasPointerCapture(event.pointerId)) {
         event.currentTarget.releasePointerCapture(event.pointerId);
@@ -1501,7 +1532,7 @@ function GameSelectScreen({ auth, games, onEnter, onLogout, onManageAccounts, on
     } catch {
       // Some browsers throw if capture was already released.
     }
-    if (!draggedId || !dragMovedRef.current) {
+    if (!draggedName || !dragMovedRef.current) {
       window.setTimeout(() => {
         suppressClickRef.current = false;
       }, 0);
@@ -1588,37 +1619,43 @@ function GameSelectScreen({ auth, games, onEnter, onLogout, onManageAccounts, on
           {allowedGames.length === 0 ? (
             <section className="empty-game-list"><ShieldBan size={30} /><strong>暂无可访问游戏</strong><span>请联系管理员为该账号分配游戏区服权限。</span></section>
           ) : (
-            <section className={`game-card-grid${draggingId ? " drag-active" : ""}`}>
-              {orderedGames.map((game) => {
-                const key = `${game.name}/${game.serverName}`;
-                const isDragging = draggingId === game.id;
-                const isPressing = pressingId === game.id;
+            <section className={`game-card-grid${draggingName ? " drag-active" : ""}`}>
+              {gameGroups.map((group) => {
+                const primaryGame = group.games[0];
+                const isDragging = draggingName === group.name;
+                const isPressing = pressingName === group.name;
                 return (
-                  <button
+                  <article
                     className={`game-card${isDragging ? " dragging" : ""}${isPressing ? " press-ready" : ""}`}
-                    data-game-id={game.id}
-                    disabled={entering === key}
-                    key={game.id ?? key}
-                    onClick={() => void enterGame(game)}
+                    data-game-name={group.name}
+                    key={group.name}
                     onPointerCancel={(event) => void finishDrag(event)}
-                    onPointerDown={(event) => beginPress(event, game)}
+                    onPointerDown={(event) => beginPress(event, group.name)}
                     onPointerLeave={clearPressTimer}
                     onPointerMove={continueDrag}
                     onPointerUp={(event) => void finishDrag(event)}
-                    type="button"
                   >
-                    <div className="game-cover" style={game.backgroundUrl ? { backgroundImage: `url(${game.backgroundUrl})` } : undefined}>
-                      {!game.backgroundUrl && <span>{game.name}</span>}
+                    <div className="game-cover" style={primaryGame.backgroundUrl ? { backgroundImage: `url(${primaryGame.backgroundUrl})` } : undefined}>
+                      {!primaryGame.backgroundUrl && <span>{group.name}</span>}
                     </div>
                     <div className="game-card-body">
-                      <div className="game-logo">{game.iconUrl ? <img alt={`${game.name} icon`} src={game.iconUrl} /> : game.logo}</div>
+                      <div className="game-logo">{primaryGame.iconUrl ? <img alt={`${group.name} icon`} src={primaryGame.iconUrl} /> : primaryGame.logo}</div>
                       <div className="game-meta">
-                        <strong>{game.name}</strong>
-                        <span>{game.serverName}</span>
+                        <strong>{group.name}</strong>
+                        <div className="game-server-links">
+                          {group.games.map((game) => {
+                            const key = `${game.name}/${game.serverName}`;
+                            return (
+                              <button disabled={entering === key} key={game.id ?? key} onClick={() => void enterGame(game)} type="button">
+                                {entering === key ? "进入中..." : game.serverName}
+                              </button>
+                            );
+                          })}
+                        </div>
                       </div>
-                      <small>{entering === key ? "进入中" : "进入后台"}</small>
+                      <small>{group.games.length} 个区服</small>
                     </div>
-                  </button>
+                  </article>
                 );
               })}
             </section>
@@ -2916,9 +2953,11 @@ function MailTemplateEditor({ endpoint = "/local-api/mail-templates", kind = "�
   };
   const downloadTemplate = () => {
     const workbook = XLSX.utils.book_new();
-    const header = ["模板名称", ...mailLanguages.flatMap((language) => [`${language}标题`, `${language}内容`])];
-    const example = ["示例模板", ...mailLanguages.flatMap((language) => [`${language}邮件标题`, `${language}邮件内容`])];
-    const sheet = XLSX.utils.aoa_to_sheet([header, example]);
+    const sheet = XLSX.utils.aoa_to_sheet([
+      ["", ...templateExportLanguages.map((language) => language.label)],
+      ["Title", ...templateExportLanguages.map((language) => `${language.label}邮件标题`)],
+      ["desc", ...templateExportLanguages.map((language) => `${language.label}邮件内容`)],
+    ]);
     XLSX.utils.book_append_sheet(workbook, sheet, `${kind}模板`);
     XLSX.writeFile(workbook, `${kind}模板导入模板.xlsx`);
   };

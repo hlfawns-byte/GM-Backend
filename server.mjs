@@ -11,7 +11,10 @@ const host = process.env.HOST || "0.0.0.0";
 const port = Number(process.env.PORT || (portal === "prod" ? 4174 : 4173));
 const gmServerTarget = (process.env.GM_SERVER_TARGET || "http://52.77.195.98:9089").replace(/\/$/, "");
 const distDir = path.resolve(__dirname, "dist");
-const dataDir = path.resolve(__dirname, "data", portal);
+const legacyDataRoot = path.resolve(__dirname, "data");
+const defaultDataRoot = path.resolve(process.env.GM_DATA_DIR || process.env.APPDATA || process.env.HOME || process.env.USERPROFILE || __dirname, process.env.GM_DATA_DIR ? "" : "ToukaGMData");
+const dataDir = path.join(defaultDataRoot, portal);
+migrateLegacyData(path.join(legacyDataRoot, portal), dataDir);
 
 const files = {
   accounts: path.join(dataDir, "accounts.json"),
@@ -34,6 +37,7 @@ const defaultGames = [
     ? { id: 1, name: "包包4", serverName: "正式服", serverUrl: "/gm-api", environment: "Prod", logo: "包" }
     : { id: 1, name: "包包4", serverName: "测试服", serverUrl: "/gm-api", environment: "Test", logo: "包" },
 ];
+const jsonCache = new Map();
 
 function ensureJson(file, fallback) {
   if (!fs.existsSync(file)) writeJson(file, fallback);
@@ -42,7 +46,12 @@ function ensureJson(file, fallback) {
 function readJson(file, fallback) {
   if (!fs.existsSync(file)) return fallback;
   try {
-    return JSON.parse(fs.readFileSync(file, "utf8"));
+    const stat = fs.statSync(file);
+    const cached = jsonCache.get(file);
+    if (cached && cached.mtimeMs === stat.mtimeMs && cached.size === stat.size) return cached.data;
+    const data = JSON.parse(fs.readFileSync(file, "utf8"));
+    jsonCache.set(file, { mtimeMs: stat.mtimeMs, size: stat.size, data });
+    return data;
   } catch {
     return fallback;
   }
@@ -51,6 +60,29 @@ function readJson(file, fallback) {
 function writeJson(file, data) {
   fs.mkdirSync(path.dirname(file), { recursive: true });
   fs.writeFileSync(file, JSON.stringify(data, null, 2), "utf8");
+  try {
+    const stat = fs.statSync(file);
+    jsonCache.set(file, { mtimeMs: stat.mtimeMs, size: stat.size, data });
+  } catch {
+    jsonCache.delete(file);
+  }
+}
+
+function migrateLegacyData(sourceDir, targetDir) {
+  if (path.resolve(sourceDir) === path.resolve(targetDir) || !fs.existsSync(sourceDir)) return;
+  const copyMissing = (source, target) => {
+    const stat = fs.statSync(source);
+    if (stat.isDirectory()) {
+      fs.mkdirSync(target, { recursive: true });
+      for (const entry of fs.readdirSync(source)) copyMissing(path.join(source, entry), path.join(target, entry));
+      return;
+    }
+    if (!fs.existsSync(target)) {
+      fs.mkdirSync(path.dirname(target), { recursive: true });
+      fs.copyFileSync(source, target);
+    }
+  };
+  copyMissing(sourceDir, targetDir);
 }
 
 function readAccounts() {
@@ -956,6 +988,7 @@ const server = createServer(async (req, res) => {
 server.listen(port, host, () => {
   console.log(`GM Admin Panel ${portal} server running at http://${host}:${port}`);
   console.log(`GM server target: ${gmServerTarget}`);
+  console.log(`GM data dir: ${dataDir}`);
 });
 
 setInterval(() => void processScheduledMails(), 10_000);

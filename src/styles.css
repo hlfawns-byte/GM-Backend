@@ -3028,14 +3028,13 @@ tbody tr:hover,
 .game-card {
   display: grid;
   grid-template-rows: 178px auto;
-  min-height: 286px;
+  min-height: 278px;
   overflow: hidden;
   border: 1px solid #dfe6ef;
   border-radius: 8px;
   padding: 0;
   background: #fff;
   color: #30394a;
-  cursor: pointer;
   text-align: left;
   touch-action: manipulation;
   transition:
@@ -3048,12 +3047,6 @@ tbody tr:hover,
   border-color: #2f8fea;
   box-shadow: 0 18px 42px rgb(35 49 73 / 14%);
   transform: translateY(-2px);
-}
-
-.game-card:disabled {
-  cursor: wait;
-  opacity: 0.72;
-  transform: none;
 }
 
 .game-card.press-ready {
@@ -3094,7 +3087,7 @@ tbody tr:hover,
 .game-card-body {
   display: grid;
   grid-template-columns: 72px 1fr auto;
-  align-items: center;
+  align-items: start;
   gap: 14px;
   min-height: 108px;
   padding: 18px 20px;
@@ -3123,22 +3116,48 @@ tbody tr:hover,
 
 .game-meta {
   display: grid;
-  gap: 6px;
+  gap: 8px;
+  min-width: 0;
 }
 
 .game-meta strong {
   font-size: 18px;
 }
 
-.game-meta span {
-  color: #66758a;
+.game-server-links {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px 14px;
+}
+
+.game-server-links button {
+  border: 0;
+  padding: 0;
+  color: #2f8fea;
+  background: transparent;
   font-size: 14px;
+  font-weight: 800;
+  cursor: pointer;
+}
+
+.game-server-links button:hover {
+  color: #176fc1;
+  text-decoration: underline;
+}
+
+.game-server-links button:disabled {
+  color: #8fbbe6;
+  cursor: wait;
+  text-decoration: none;
 }
 
 .game-card small {
+  align-self: center;
   color: #2f8fea;
   font-size: 13px;
   font-weight: 750;
+  white-space: nowrap;
 }
 
 .empty-game-list {
