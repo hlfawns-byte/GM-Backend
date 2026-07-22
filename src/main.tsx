@@ -203,7 +203,15 @@ type NoticeConfig = {
   regEnd?: string;
   platforms?: string;
   versions?: string;
+  conditions?: ConditionRow[];
   updatedAt?: string;
+};
+
+type ConditionRow = {
+  id: number;
+  field: string;
+  op: string;
+  value: string;
 };
 
 type MailRewardItem = {
@@ -553,6 +561,12 @@ function formatVersionConditionList(values: unknown[]) {
     }
   }
   return formatted;
+}
+
+function toNoticeVersionArray(value?: string) {
+  const text = String(value ?? "").trim();
+  if (!text) return [];
+  return text.includes(".") ? toVersionNumberArray(text) : toFlexibleNumberArray(text);
 }
 
 function defaultMailRegEndDisplay() {
@@ -2572,6 +2586,7 @@ function serverConditionIds(rows: Array<{ field: string; op: string; value: stri
   const serverRows = rows.filter((row) => row.field === "server" && row.value.trim());
   if (!serverRows.length) return [];
   const allServerIds = serverOptions.map((server) => Number(server.id)).filter((id) => Number.isFinite(id)).sort((a, b) => a - b);
+  if (!allServerIds.length && serverRows.every((row) => row.op === "=")) return Array.from(new Set(serverRows.flatMap((row) => toFlexibleNumberArray(row.value)))).sort((a, b) => a - b);
   let selected = new Set(allServerIds);
   for (const row of serverRows) {
     const values = toFlexibleNumberArray(row.value);
@@ -2955,8 +2970,8 @@ function MailTemplateEditor({ endpoint = "/local-api/mail-templates", kind = "�
     const workbook = XLSX.utils.book_new();
     const sheet = XLSX.utils.aoa_to_sheet([
       ["", ...templateExportLanguages.map((language) => language.label)],
-      ["Title", ...templateExportLanguages.map((language) => `${language.label}邮件标题`)],
-      ["desc", ...templateExportLanguages.map((language) => `${language.label}邮件内容`)],
+      ["Title", ...templateExportLanguages.map(() => "")],
+      ["desc", ...templateExportLanguages.map(() => "")],
     ]);
     XLSX.utils.book_append_sheet(workbook, sheet, `${kind}模板`);
     XLSX.writeFile(workbook, `${kind}模板导入模板.xlsx`);
@@ -3408,18 +3423,33 @@ function UnavailablePanel({ module }: { module: ModuleConfig }) {
   return <section className="unavailable-panel"><module.icon size={34} /><strong>{module.title}暂未开放</strong><p>{module.description}</p></section>;
 }
 
+function noticeConditionsFromFields(notice: Partial<NoticeConfig>): ConditionRow[] {
+  const rows: ConditionRow[] = [];
+  let id = 1;
+  if (notice.platforms?.trim()) rows.push({ id: id++, field: "system", op: "=", value: notice.platforms });
+  if (notice.versions?.trim()) rows.push({ id: id++, field: "version", op: "=", value: notice.versions });
+  if (Number(notice.typ) === 1 && notice.sid?.trim()) rows.push({ id: id++, field: "server", op: "=", value: notice.sid });
+  if (notice.regBegin?.trim()) rows.push({ id: id++, field: "regTime", op: ">=", value: notice.regBegin });
+  if (notice.regEnd?.trim()) rows.push({ id: id++, field: "regTime", op: "<=", value: notice.regEnd });
+  return rows;
+}
+
+function noticeDefaultConditionValue(field: string, op = "=") {
+  if (field === "regTime") return op === "<=" ? defaultRegEndTime() : MAIL_DEFAULT_REG_BEGIN;
+  return "";
+}
+
 function NoticePage({ postWithToken }: { postWithToken: (endpoint: string, body: unknown) => Promise<ApiPostResponse> }) {
   const [notices, setNotices] = React.useState<NoticeConfig[]>([]);
   const [serverOptions, setServerOptions] = React.useState<ServerOption[]>([]);
   const [noticeTemplates, setNoticeTemplates] = React.useState<MailTemplate[]>([]);
   const [editing, setEditing] = React.useState<NoticeConfig | null>(null);
-  const [form, setForm] = React.useState<NoticeConfig>({ slot: 1, templateName: "", title: "", body: "", contents: emptyLanguageContents(), imagePath: "", typ: 0, sid: "", regBegin: "", regEnd: "", platforms: "", versions: "" });
+  const [form, setForm] = React.useState<NoticeConfig>({ slot: 1, templateName: "", title: "", body: "", contents: emptyLanguageContents(), imagePath: "", typ: 0, sid: "", regBegin: "", regEnd: "", platforms: "", versions: "", conditions: [] });
   const [noticeDrafts, setNoticeDrafts] = React.useState<NoticeConfig[]>([]);
-  const [activeNoticeLanguage, setActiveNoticeLanguage] = React.useState(defaultMailLanguage);
   const [saving, setSaving] = React.useState(false);
   const [status, setStatus] = React.useState("");
   const palettes = ["blue", "green", "orange"];
-  const emptyNotice = (slot: number): NoticeConfig => ({ slot, templateName: "", title: "", body: "", contents: emptyLanguageContents(), imagePath: "", typ: 0, sid: "", regBegin: "", regEnd: "", platforms: "", versions: "" });
+  const emptyNotice = (slot: number): NoticeConfig => ({ slot, templateName: "", title: "", body: "", contents: emptyLanguageContents(), imagePath: "", typ: 0, sid: "", regBegin: "", regEnd: "", platforms: "", versions: "", conditions: [] });
   const normalizeNotice = (notice: Partial<NoticeConfig>, slot = Number(notice.slot) || 1): NoticeConfig => ({
     slot,
     templateName: notice.templateName ?? "",
@@ -3433,6 +3463,7 @@ function NoticePage({ postWithToken }: { postWithToken: (endpoint: string, body:
     regEnd: notice.regEnd ?? "",
     platforms: notice.platforms ?? "",
     versions: notice.versions ?? "",
+    conditions: Array.isArray(notice.conditions) ? notice.conditions : noticeConditionsFromFields(notice),
   });
 
   const refresh = React.useCallback(async () => {
@@ -3495,41 +3526,59 @@ function NoticePage({ postWithToken }: { postWithToken: (endpoint: string, body:
     if (saving) return;
     const normalizedContents = fillMissingLanguageContents(form.contents, { title: form.title, body: form.body });
     const primaryNoticeContent = normalizedContents[defaultMailLanguage].title && normalizedContents[defaultMailLanguage].body ? normalizedContents[defaultMailLanguage] : Object.values(normalizedContents).find((content) => content.title && content.body) ?? { title: "", body: "" };
-    const effectiveForm = {
-      ...form,
-      imagePath: form.imagePath.trim() || NOTICE_DEFAULT_IMAGE,
-      typ: Number(form.typ) === 1 ? 1 : 0,
-      sid: Number(form.typ) === 1 ? form.sid : "",
-      regBegin: form.regBegin || "",
-      regEnd: form.regEnd || "",
-      platforms: form.platforms || "",
-      versions: form.versions || "",
-    };
-    const sidValues = toFlexibleNumberArray(effectiveForm.sid);
-    if (Number(effectiveForm.typ) === 1 && !sidValues.length) {
-      setStatus("公告保存失败：指定服务器未填写");
+    const conditionRows = form.conditions ?? [];
+    const versionList = toVersionConditionArray(conditionRows);
+    const platformList = conditionRows.filter((row) => row.field === "system").flatMap((row) => toPlatformNumberArray(row.value));
+    const sidValues = serverConditionIds(conditionRows, serverOptions);
+    const regBeginValues = conditionRows.filter((row) => row.field === "regTime" && row.op === ">=" && row.value).map((row) => parseDatetimeLocalSeconds(dateToDatetimeLocal(row.value)));
+    const regEndValues = conditionRows.filter((row) => row.field === "regTime" && row.op === "<=" && row.value).map((row) => parseDatetimeLocalSeconds(dateToDatetimeLocal(row.value, true)));
+    const regBeginSeconds = regBeginValues.length ? Math.max(...regBeginValues) : 0;
+    const regEndSeconds = regEndValues.length ? Math.min(...regEndValues) : 0;
+    if (conditionRows.some((row) => row.field === "system" && row.op !== "=" && row.value.trim())) {
+      setStatus("公告保存失败：系统条件只支持等于");
       return;
     }
-    if (effectiveForm.regBegin && !parseDatetimeLocalSeconds(effectiveForm.regBegin)) {
-      setStatus("公告保存失败：注册开始时间无效");
+    const emptyCondition = conditionRows.find((row) => ["system", "version", "server"].includes(row.field) && !row.value.trim());
+    if (emptyCondition) {
+      const labels: Record<string, string> = { system: "系统", version: "版本", server: "区服" };
+      setStatus(`公告保存失败：${labels[emptyCondition.field] ?? "条件"}未填写`);
       return;
     }
-    if (effectiveForm.regEnd && !parseDatetimeLocalSeconds(effectiveForm.regEnd)) {
-      setStatus("公告保存失败：注册结束时间无效");
-      return;
-    }
-    if (effectiveForm.regBegin && effectiveForm.regEnd && parseDatetimeLocalSeconds(effectiveForm.regEnd) <= parseDatetimeLocalSeconds(effectiveForm.regBegin)) {
-      setStatus("公告保存失败：注册结束时间必须晚于注册开始时间");
-      return;
-    }
-    if (effectiveForm.platforms && !toPlatformNumberArray(effectiveForm.platforms).length) {
-      setStatus("公告保存失败：平台请选择 GooglePlay 或 iOS");
-      return;
-    }
-    if (effectiveForm.versions && !toVersionNumberArray(effectiveForm.versions).length) {
+    if (conditionRows.some((row) => row.field === "version" && row.value.trim() && !toVersionConditionArray([row]).length)) {
       setStatus("公告保存失败：版本请填写 x.x.x 或 x.x.x.x，例如 1.8.0.0");
       return;
     }
+    if (conditionRows.some((row) => row.field === "system" && row.value.trim() && !toPlatformNumberArray(row.value).length)) {
+      setStatus("公告保存失败：平台请选择 GooglePlay 或 iOS");
+      return;
+    }
+    if (conditionRows.some((row) => row.field === "server" && row.op !== "=" && row.value.trim()) && !serverOptions.length) {
+      setStatus("公告保存失败：区服范围条件需要先获取到区服列表");
+      return;
+    }
+    if (conditionRows.some((row) => row.field === "server" && row.value.trim()) && !sidValues.length) {
+      setStatus("公告保存失败：没有符合条件的区服");
+      return;
+    }
+    if (regBeginValues.some((value) => !value) || regEndValues.some((value) => !value)) {
+      setStatus("公告保存失败：请选择有效的注册时间区间");
+      return;
+    }
+    if (regBeginSeconds && regEndSeconds && regEndSeconds <= regBeginSeconds) {
+      setStatus("公告保存失败：注册结束时间必须晚于注册开始时间");
+      return;
+    }
+    const effectiveForm = {
+      ...form,
+      imagePath: form.imagePath.trim() || NOTICE_DEFAULT_IMAGE,
+      typ: sidValues.length ? 1 : 0,
+      sid: sidValues.join(","),
+      regBegin: regBeginSeconds ? secondsToDatetimeLocal(regBeginSeconds) : "",
+      regEnd: regEndSeconds ? secondsToDatetimeLocal(regEndSeconds) : "",
+      platforms: platformList.join(","),
+      versions: versionList.join(","),
+      conditions: conditionRows,
+    };
     const normalizedForm = normalizeNotice({ ...effectiveForm, title: primaryNoticeContent.title, body: primaryNoticeContent.body, contents: normalizedContents }, Number(effectiveForm.slot) || 1);
     setSaving(true);
     try {
@@ -3550,13 +3599,6 @@ function NoticePage({ postWithToken }: { postWithToken: (endpoint: string, body:
     }
   };
 
-  const noticeContents = normalizeLanguageContents(form.contents, { title: form.title, body: form.body });
-  const activeNoticeContent = noticeContents[activeNoticeLanguage] ?? { title: "", body: "" };
-  const updateNoticeContent = (patch: Partial<MailTemplateContent>) => {
-    const nextContents = { ...noticeContents, [activeNoticeLanguage]: { ...activeNoticeContent, ...patch } };
-    const primary = nextContents[defaultMailLanguage] ?? Object.values(nextContents).find((content) => content.title || content.body) ?? { title: "", body: "" };
-    setForm({ ...form, title: primary.title, body: primary.body, contents: nextContents });
-  };
   const applyNoticeTemplate = (templateId: string) => {
     const template = noticeTemplates.find((item) => item.id === templateId);
     if (!template) {
@@ -3581,6 +3623,13 @@ function NoticePage({ postWithToken }: { postWithToken: (endpoint: string, body:
     if (Number(editing?.slot) === slot) setEditing(null);
     await refresh();
   };
+  const noticeFilterFieldOptions = [
+    { value: "system", label: "系统" },
+    { value: "version", label: "app版本" },
+    { value: "regTime", label: "注册时间" },
+    { value: "server", label: "游戏内区服" },
+  ];
+  const noticeConditionRows = form.conditions ?? [];
 
   return (
     <section className="notice-page">
@@ -3619,16 +3668,55 @@ function NoticePage({ postWithToken }: { postWithToken: (endpoint: string, body:
             <div className="notice-form">
               <label>公告位置<select value={form.slot} onChange={(event) => switchNoticeSlot(Number(event.target.value))}><option value={1}>公告 1</option><option value={2}>公告 2</option><option value={3}>公告 3</option></select></label>
               <label>公告模板<select value={noticeTemplates.find((template) => template.name === form.templateName)?.id ?? ""} onChange={(event) => applyNoticeTemplate(event.target.value)}><option value="">请选择公告模板</option>{noticeTemplates.map((template) => <option key={template.id} value={template.id}>{template.name}</option>)}</select></label>
-              <div className="notice-language-tabs">{languageDefinitions.map((language) => <button className={activeNoticeLanguage === language.label ? "active" : ""} key={language.id} onClick={() => setActiveNoticeLanguage(language.label)} type="button"><small>{language.id}</small>{language.label}</button>)}</div>
-              <label>公告标题<input value={activeNoticeContent.title} onChange={(event) => updateNoticeContent({ title: event.target.value })} placeholder={`请输入${activeNoticeLanguage}公告标题`} /></label>
-              <label>公告内容<textarea value={activeNoticeContent.body} onChange={(event) => updateNoticeContent({ body: event.target.value })} placeholder={`请输入${activeNoticeLanguage}公告内容`} /></label>
               <label>配图路径<input value={form.imagePath} onChange={(event) => setForm({ ...form, imagePath: event.target.value })} placeholder={`默认：${NOTICE_DEFAULT_IMAGE}`} /></label>
-              <label>公告范围<select value={form.typ ?? 0} onChange={(event) => setForm({ ...form, typ: Number(event.target.value) })}><option value={0}>全部服务器</option><option value={1}>指定服务器</option></select></label>
-              {Number(form.typ) === 1 && <label>指定服务器<input list="notice-server-options" value={form.sid ?? ""} onChange={(event) => setForm({ ...form, sid: event.target.value })} placeholder="例如 1 或 1,2" /><datalist id="notice-server-options">{serverOptions.map((server) => <option key={server.id} value={server.id}>{server.name}</option>)}</datalist></label>}
-              <label>注册开始<input type="datetime-local" value={form.regBegin ?? ""} onChange={(event) => setForm({ ...form, regBegin: event.target.value })} placeholder="默认：2020-01-01 00:00" /></label>
-              <label>注册结束<input type="datetime-local" value={form.regEnd ?? ""} onChange={(event) => setForm({ ...form, regEnd: event.target.value })} placeholder="默认：2050-12-31 23:59" /></label>
-              <label>平台筛选<select value={form.platforms ?? ""} onChange={(event) => setForm({ ...form, platforms: event.target.value })}><option value="">全部平台</option><option value="1">GooglePlay</option><option value="2">iOS</option><option value="1,2">GooglePlay + iOS</option></select></label>
-              <label>版本筛选<input value={form.versions ?? ""} onChange={(event) => setForm({ ...form, versions: event.target.value })} placeholder="例如 1.8.0.0；留空全部" /></label>
+              <div className="notice-condition-block">
+                <span>条件</span>
+                <div className="mail-condition-list">
+                  {noticeConditionRows.length === 0 && <div className="mail-condition-empty">默认无条件，公告会展示给全部目标。</div>}
+                  {noticeConditionRows.map((row) => (
+                    <div className="mail-condition-row" key={row.id}>
+                      <select value={row.field} onChange={(event) => {
+                        const nextField = event.target.value;
+                        const nextOp = nextField === "regTime" ? ">=" : "=";
+                        setForm({ ...form, conditions: noticeConditionRows.map((item) => item.id === row.id ? { ...item, field: nextField, op: nextOp, value: noticeDefaultConditionValue(nextField, nextOp) } : item) });
+                      }}>
+                        {noticeFilterFieldOptions.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}
+                      </select>
+                      {["regTime", "version", "server"].includes(row.field) ? (
+                        <select className="mail-condition-expression" value={row.op} onChange={(event) => {
+                          const nextOp = event.target.value;
+                          setForm({ ...form, conditions: noticeConditionRows.map((item) => item.id === row.id ? { ...item, op: nextOp, value: item.value || noticeDefaultConditionValue(item.field, nextOp) } : item) });
+                        }}>
+                          {row.field !== "regTime" && <option value="=">=</option>}
+                          <option value=">=">&gt;=</option>
+                          <option value="<=">&lt;=</option>
+                        </select>
+                      ) : (
+                        <select className="mail-condition-expression" value="=" onChange={() => undefined}><option value="=">=</option></select>
+                      )}
+                      {row.field === "system" ? (
+                        <select value={row.value} onChange={(event) => setForm({ ...form, conditions: noticeConditionRows.map((item) => item.id === row.id ? { ...item, value: event.target.value } : item) })}>
+                          <option value="">请选择</option>
+                          <option value="1">GooglePlay</option>
+                          <option value="2">iOS</option>
+                        </select>
+                      ) : row.field === "regTime" ? (
+                        <input type="datetime-local" value={dateToDatetimeLocal(row.value, row.op === "<=")} onChange={(event) => setForm({ ...form, conditions: noticeConditionRows.map((item) => item.id === row.id ? { ...item, value: event.target.value } : item) })} />
+                      ) : row.field === "server" && serverOptions.length ? (
+                        <select value={row.value} onChange={(event) => setForm({ ...form, conditions: noticeConditionRows.map((item) => item.id === row.id ? { ...item, value: event.target.value } : item) })}>
+                          <option value="">请选择游戏内区服</option>
+                          {serverOptions.map((server) => <option key={server.id} value={server.id}>{server.name}</option>)}
+                        </select>
+                      ) : (
+                        <input value={row.value} onChange={(event) => setForm({ ...form, conditions: noticeConditionRows.map((item) => item.id === row.id ? { ...item, value: event.target.value } : item) })} placeholder={row.field === "version" ? "例如 1.8.0.0" : row.field === "server" ? "例如 12 或 1,2" : "例如 1,2"} />
+                      )}
+                      <button className="mail-condition-remove" onClick={() => setForm({ ...form, conditions: noticeConditionRows.filter((item) => item.id !== row.id) })} type="button">删除</button>
+                    </div>
+                  ))}
+                  <button className="mail-add-condition" onClick={() => setForm({ ...form, conditions: [...noticeConditionRows, { id: Date.now() + noticeConditionRows.length, field: "system", op: "=", value: "" }] })} type="button">新增条件</button>
+                  <small className="mail-condition-hint">多个条件同时填写时为且的关系。游戏内区服、系统、版本和注册时间会转换成公告接口筛选条件。</small>
+                </div>
+              </div>
               {status && <div className="mail-form-error">{status}</div>}
               <footer><button disabled={saving} onClick={() => void save()} type="button">{saving ? "保存中..." : "保存"}</button><button disabled={saving} onClick={() => setEditing(null)} type="button">取消</button></footer>
             </div>
@@ -3648,7 +3736,8 @@ function noticePayloadToConfigs(data: Record<string, unknown> | null): NoticeCon
     const title = String(data?.[`Titel${suffix}`] ?? "");
     const body = String(data?.[`Body${suffix}`] ?? "");
     const contents = parseNoticeLanguageContents(data, slot, { title, body });
-    return {
+    const versionText = Array.isArray(version) ? formatVersionConditionList(version).join(",") : "";
+    const config = {
       slot,
       templateName: String(data?.[`TemplateName${slot}`] ?? data?.[`NoticeTemplate${slot}`] ?? ""),
       title,
@@ -3660,7 +3749,11 @@ function noticePayloadToConfigs(data: Record<string, unknown> | null): NoticeCon
       regBegin: secondsToDatetimeLocal(data?.[`RegtBegin${slot}`]),
       regEnd: secondsToDatetimeLocal(data?.[`RegtEnd${slot}`]),
       platforms: Array.isArray(platform) ? platform.join(",") : "",
-      versions: Array.isArray(version) ? version.join(",") : "",
+      versions: versionText,
+    };
+    return {
+      ...config,
+      conditions: noticeConditionsFromFields(config),
     };
   });
 }
@@ -3734,7 +3827,7 @@ function configsToNoticePayload(configs: NoticeConfig[]) {
     payload[`RegtEnd${slot}`] = effectiveConfig.regEnd ? parseDatetimeLocalSeconds(effectiveConfig.regEnd) : 0;
     payload[`Sid${slot}`] = isSpecifiedServer ? sid : [];
     const platforms = toPlatformNumberArray(effectiveConfig.platforms);
-    const versions = toVersionNumberArray(effectiveConfig.versions);
+    const versions = toNoticeVersionArray(effectiveConfig.versions);
     payload[`Platform${slot}`] = platforms.length ? platforms : [];
     payload[`Version${slot}`] = versions.length ? versions : [];
   }

@@ -1672,6 +1672,34 @@ tbody tr:hover,
   font-weight: 750;
 }
 
+.notice-condition-block {
+  display: grid;
+  gap: 8px;
+  color: #566579;
+  font-size: 13px;
+}
+
+.notice-condition-block > span {
+  font-weight: 750;
+}
+
+.notice-condition-block .mail-condition-list {
+  width: 100%;
+  max-width: 100%;
+  gap: 10px;
+}
+
+.notice-condition-block .mail-condition-row {
+  grid-template-columns: minmax(104px, 1fr) 82px minmax(160px, 1.6fr) 64px;
+  gap: 10px;
+  min-height: 60px;
+  padding: 12px;
+}
+
+.notice-condition-block .mail-condition-remove {
+  width: 64px;
+}
+
 .notice-form textarea {
   min-height: 130px;
 }
