@@ -1327,6 +1327,106 @@ tbody tr:hover,
   font-size: 13px;
 }
 
+.order-refund-page {
+  display: grid;
+  gap: 16px;
+}
+
+.refund-card {
+  display: grid;
+  gap: 18px;
+  max-width: 720px;
+  padding: 22px;
+  border: 1px solid #e3e9f1;
+  border-radius: 6px;
+  background: #fff;
+  box-shadow: 0 8px 22px rgb(39 56 82 / 5%);
+}
+
+.refund-card header {
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+}
+
+.refund-card header svg {
+  color: #2f8fea;
+}
+
+.refund-card header strong,
+.refund-card header span {
+  display: block;
+}
+
+.refund-card header span {
+  margin-top: 4px;
+  color: #68758a;
+  font-size: 13px;
+}
+
+.refund-card label {
+  display: grid;
+  gap: 8px;
+  color: #445168;
+  font-size: 13px;
+  font-weight: 700;
+}
+
+.refund-card input {
+  height: 40px;
+  border: 1px solid #d8e3f0;
+  border-radius: 4px;
+  padding: 0 12px;
+  color: #263349;
+}
+
+.refund-actions {
+  display: flex;
+  justify-content: flex-start;
+}
+
+.refund-actions button {
+  height: 38px;
+  border: 0;
+  border-radius: 4px;
+  padding: 0 18px;
+  color: #fff;
+  background: #2f8fea;
+  font-weight: 800;
+}
+
+.refund-actions button:disabled {
+  opacity: 0.62;
+  cursor: not-allowed;
+}
+
+.refund-status {
+  padding: 10px 12px;
+  border: 1px solid #ffd7d1;
+  border-radius: 4px;
+  color: #c22c21;
+  background: #fff7f5;
+}
+
+.refund-status.success {
+  border-color: #bfecd4;
+  color: #16784e;
+  background: #f0fbf5;
+}
+
+.refund-result {
+  margin: 0;
+  max-height: 260px;
+  overflow: auto;
+  border: 1px solid #e3e9f1;
+  border-radius: 4px;
+  padding: 12px;
+  color: #344257;
+  background: #f8fafc;
+  font-size: 12px;
+  line-height: 1.6;
+}
+
 .notice-page {
   display: grid;
   align-content: start;
@@ -3469,6 +3569,7 @@ tbody tr:hover,
   grid-template-columns: 360px 1fr;
   gap: 20px;
   padding: 18px 22px 22px;
+  min-height: 0;
 }
 
 .account-form {
@@ -3616,6 +3717,7 @@ tbody tr:hover,
   gap: 12px;
   max-height: 520px;
   overflow: auto;
+  min-width: 0;
 }
 
 .managed-account {
@@ -3630,9 +3732,30 @@ tbody tr:hover,
   background: #fff;
 }
 
+.account-managed-list {
+  max-height: min(520px, calc(100vh - 170px));
+  padding-right: 6px;
+}
+
+.account-managed-item {
+  grid-template-columns: minmax(170px, 1fr) minmax(220px, 1.25fr) auto;
+  align-items: center;
+}
+
+.account-managed-item > div {
+  min-width: 0;
+}
+
+.account-managed-item .tag-row {
+  max-height: 58px;
+  overflow: hidden;
+  align-content: flex-start;
+}
+
 .managed-account strong,
 .managed-account span {
   display: block;
+  overflow-wrap: anywhere;
 }
 
 .managed-account span {
@@ -3645,14 +3768,18 @@ tbody tr:hover,
   display: flex;
   flex-wrap: wrap;
   gap: 6px;
+  min-width: 0;
 }
 
 .tag-row small {
+  max-width: 100%;
   padding: 4px 7px;
   border-radius: 4px;
   color: #35617f;
   background: #edf7ff;
   font-size: 12px;
+  line-height: 1.35;
+  overflow-wrap: anywhere;
 }
 
 .managed-actions {

@@ -4,6 +4,7 @@ import * as XLSX from "xlsx";
 import {
   Bell,
   ChevronDown,
+  CreditCard,
   Database,
   Gift,
   KeyRound,
@@ -48,6 +49,7 @@ type SectionKey =
   | "sprint"
   | "systemMsg"
   | "serverTime"
+  | "orderRefund"
   | "chatClear"
   | "rank"
   | "logs";
@@ -335,6 +337,7 @@ const navGroups = [
     icon: SlidersHorizontal,
     items: [
       { key: "serverTime", label: "开服管理" },
+      { key: "orderRefund", label: "三方支付退款" },
       { key: "logs", label: "作业日志" },
     ],
   },
@@ -444,6 +447,7 @@ const modules: Record<SectionKey, ModuleConfig> = {
   sprint: { title: "冲刺活动", description: "冲刺活动新增和列表", icon: Trophy, status: "live", actions: [{ key: "gmSprintLst", label: "活动列表", endpoint: "/gmSprintLst", fields: [], buildBody: () => ({}) }, { key: "gmSprintAddLst", label: "新增活动", endpoint: "/gmSprintAddLst", fields: [{ key: "Body", label: "活动JSON", kind: "textarea" }], buildBody: (v) => parseJson(v.Body) }] },
   systemMsg: { title: "系统消息", description: "向在线玩家发送系统消息", icon: MessageSquare, status: "live", actions: [{ key: "gmSendSystemMsg", label: "发送消息", endpoint: "/gmSendSystemMsg", fields: [{ key: "Msg", label: "消息内容", kind: "textarea" }], buildBody: (v) => ({ Msg: v.Msg }) }] },
   serverTime: { title: "开服管理", description: "查询和配置开服时间", icon: Server, status: "live", actions: [] },
+  orderRefund: { title: "三方支付退款", description: "输入三方支付订单号处理用户退款", icon: CreditCard, status: "live", actions: [] },
   chatClear: { title: "清理聊天", description: "清理聊天消息", icon: Send, status: "live", actions: [{ key: "gmClearChatMsg", label: "清理聊天", endpoint: "/gmClearChatMsg", fields: [], buildBody: () => ({}) }] },
   rank: { title: "排行榜查询", description: "当前接口文档暂未开放", icon: Trophy, status: "pending", actions: [] },
   logs: { title: "作业日志", description: "当前接口文档暂未开放", icon: Database, status: "pending", actions: [] },
@@ -1202,7 +1206,7 @@ function App() {
             </section>
           )}
 
-          {active === "dashboard" ? <Dashboard results={results} accounts={accounts} /> : active === "playerInfo" ? <PlayerInfoPage postWithToken={postWithToken} /> : active === "bindUid" ? <BindUidPage postWithToken={postWithToken} /> : active === "gmState" ? <BanControlPage postWithToken={postWithToken} /> : active === "silence" ? <SilencePage operator={session.operatorAccount} /> : active.startsWith("mail") ? <MailSuitePage active={active as MailSectionKey} canUploadItemTable={auth.isAdmin} postWithToken={postWithToken} session={session} setActive={setActive} /> : active.startsWith("gift") ? <GiftSuitePage active={active as GiftSectionKey} canUploadItemTable={auth.isAdmin} postWithToken={postWithToken} /> : active === "notice" ? <NoticePage postWithToken={postWithToken} /> : active === "noticeTemplate" ? <NoticeTemplatePage /> : active === "serverTime" ? <OpenServerPage postWithToken={postWithToken} /> : moduleConfig.status === "pending" ? <UnavailablePanel module={moduleConfig} /> : (
+          {active === "dashboard" ? <Dashboard results={results} accounts={accounts} /> : active === "playerInfo" ? <PlayerInfoPage postWithToken={postWithToken} /> : active === "bindUid" ? <BindUidPage postWithToken={postWithToken} /> : active === "gmState" ? <BanControlPage postWithToken={postWithToken} /> : active === "silence" ? <SilencePage operator={session.operatorAccount} /> : active.startsWith("mail") ? <MailSuitePage active={active as MailSectionKey} canUploadItemTable={auth.isAdmin} postWithToken={postWithToken} session={session} setActive={setActive} /> : active.startsWith("gift") ? <GiftSuitePage active={active as GiftSectionKey} canUploadItemTable={auth.isAdmin} postWithToken={postWithToken} /> : active === "notice" ? <NoticePage postWithToken={postWithToken} /> : active === "noticeTemplate" ? <NoticeTemplatePage /> : active === "serverTime" ? <OpenServerPage postWithToken={postWithToken} /> : active === "orderRefund" ? <OrderRefundPage postWithToken={postWithToken} /> : moduleConfig.status === "pending" ? <UnavailablePanel module={moduleConfig} /> : (
             <>
               <section className="filter-panel">
                 <div className="panel-heading">
@@ -2050,6 +2054,58 @@ function OpenServerPage({ postWithToken }: { postWithToken: (endpoint: string, b
 
 function OpenServerCard({ children, color, desc, title }: { children: React.ReactNode; color: "blue" | "green" | "purple" | "red"; desc: string; title: string }) {
   return <section className={`open-server-card ${color}`}><span>admin</span><h3>{title}</h3><p>{desc}</p><div>{children}</div></section>;
+}
+
+function OrderRefundPage({ postWithToken }: { postWithToken: (endpoint: string, body: unknown) => Promise<ApiPostResponse> }) {
+  const [orderId, setOrderId] = React.useState("");
+  const [status, setStatus] = React.useState("");
+  const [submitting, setSubmitting] = React.useState(false);
+  const [lastResult, setLastResult] = React.useState<Record<string, unknown> | null>(null);
+
+  const submit = async () => {
+    const normalizedOrderId = orderId.trim();
+    if (!normalizedOrderId) {
+      setStatus("请输入订单号");
+      return;
+    }
+    if (!window.confirm(`确认对订单 ${normalizedOrderId} 发起退款？`)) return;
+    setSubmitting(true);
+    setStatus("");
+    setLastResult(null);
+    try {
+      const result = await postWithToken("/gmOrderRefund", { order_id: normalizedOrderId });
+      const payload = getObject(result.payload) ?? {};
+      const data = getApiData(result.payload);
+      const code = Number(payload.code ?? data?.code);
+      const message = String(payload.result ?? data?.result ?? "");
+      setLastResult(payload);
+      if (!result.ok) {
+        setStatus(`退款失败：HTTP ${result.status}`);
+        return;
+      }
+      if (Number.isFinite(code) && code !== 0) {
+        setStatus(`退款失败：${message || `错误码 ${code}`}`);
+        return;
+      }
+      setStatus(`退款成功：${normalizedOrderId}`);
+    } catch (error) {
+      setStatus(error instanceof Error ? `退款失败：${error.message}` : "退款失败");
+    } finally {
+      setSubmitting(false);
+    }
+  };
+
+  return (
+    <section className="order-refund-page">
+      <div className="refund-card">
+        <header><CreditCard size={22} /><div><strong>三方支付用户退款</strong><span>输入三方支付订单号后提交给游戏服务端处理退款。</span></div></header>
+        <label>订单号<input value={orderId} onChange={(event) => setOrderId(event.target.value)} placeholder="例如：GPA.3340-7674-3284-test" /></label>
+        <div className="refund-actions"><button disabled={submitting} onClick={() => void submit()} type="button">{submitting ? "处理中..." : "处理退款"}</button></div>
+        {status && <div className={status.includes("成功") ? "refund-status success" : "refund-status"}>{status}</div>}
+        {lastResult && <pre className="refund-result">{JSON.stringify(lastResult, null, 2)}</pre>}
+      </div>
+    </section>
+  );
 }
 
 function MailSuitePage({ active, canUploadItemTable, postWithToken, session, setActive }: { active: MailSectionKey; canUploadItemTable: boolean; postWithToken: (endpoint: string, body: unknown) => Promise<ApiPostResponse>; session: Session; setActive: (section: SectionKey) => void }) {
@@ -3715,8 +3771,8 @@ function AccountPanel({ accounts, canManageAdmins, games, session, onAdd, onDele
             </div>
             {formError && <div className="form-error">{formError}</div>}
           </form>
-          <div className="managed-list">{accounts.length === 0 ? <div className="empty-table"><strong>暂无子账号</strong><span>请在左侧创建账号给其他人使用。</span></div> : accounts.map((account) => (
-            <article className="managed-account" key={account.id}>
+          <div className="managed-list account-managed-list">{accounts.length === 0 ? <div className="empty-table"><strong>暂无子账号</strong><span>请在左侧创建账号给其他人使用。</span></div> : accounts.map((account) => (
+            <article className="managed-account account-managed-item" key={account.id}>
               <div><strong>{account.displayName}</strong><span>{account.account} / {account.role}{account.isManager ? " / 后台管理员" : ""}</span></div>
               <div className="tag-row">{account.isManager ? <small>全部游戏</small> : account.games.map((item) => <small key={item}>{item}</small>)}{account.permissions.slice(0, 3).map((item) => <small key={item}>{item}</small>)}</div>
               <div className="managed-actions"><button onClick={() => beginEdit(account)} type="button"><UserCog size={14} />编辑</button>{canManageAdmins ? <button onClick={() => void onDelete(account.id)} type="button"><Trash2 size={14} />删除</button> : <button disabled type="button"><Trash2 size={14} />仅admin可删</button>}</div>
