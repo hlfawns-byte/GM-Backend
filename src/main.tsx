@@ -498,43 +498,85 @@ function toVersionNumberArray(value?: string) {
 }
 
 function versionTextToCode(value: string) {
+  const parts = parseVersionParts(value);
+  if (!parts) return null;
+  return versionPartsToCode(parts);
+}
+
+function parseVersionParts(value: string) {
   const text = value.trim();
-  if (!/^\d+(?:\.\d+){2,3}$/.test(text)) return null;
+  if (!/^\d+(?:\.\d+){1,3}$/.test(text)) return null;
   const parts = text.split(".").map((part) => Number(part));
   if (!parts.every((part) => Number.isInteger(part) && part >= 0 && part <= 99)) return null;
+  return parts;
+}
+
+function versionInputToParts(value: string, op: string) {
+  const parts = parseVersionParts(value);
+  if (!parts) return null;
+  if (parts.length === 2 && op === "<=") return [parts[0], parts[1], 99, 99];
+  if (parts.length === 2) return [parts[0], parts[1], 0];
+  return parts;
+}
+
+function versionPartsToCode(parts: number[]) {
   return parts.reduce((total, part, index) => total + part * Math.pow(100, parts.length - index - 1), 0);
+}
+
+function compareVersionParts(left: number[], right: number[]) {
+  const maxLength = Math.max(left.length, right.length, 3);
+  for (let index = 0; index < maxLength; index += 1) {
+    const diff = (left[index] ?? 0) - (right[index] ?? 0);
+    if (diff !== 0) return diff;
+  }
+  return 0;
+}
+
+function enumerateVersionsUpTo(target: number[], includeTarget: boolean) {
+  const result: number[] = [];
+  const targetMajor = target[0] ?? 1;
+  for (let major = 1; major <= targetMajor; major += 1) {
+    const maxMinor = major === targetMajor ? target[1] ?? 0 : 99;
+    for (let minor = 0; minor <= maxMinor; minor += 1) {
+      const maxPatch = major === targetMajor && minor === maxMinor ? target[2] ?? 0 : 99;
+      for (let patch = 0; patch <= maxPatch; patch += 1) {
+        const base = [major, minor, patch];
+        const baseCompare = compareVersionParts(base, target);
+        if (baseCompare < 0 || (includeTarget && baseCompare === 0)) result.push(versionPartsToCode(base));
+        const maxHotfix = major === targetMajor && minor === maxMinor && patch === maxPatch ? target[3] ?? 0 : 99;
+        for (let hotfix = 1; hotfix <= maxHotfix; hotfix += 1) {
+          const hotfixParts = [major, minor, patch, hotfix];
+          const hotfixCompare = compareVersionParts(hotfixParts, target);
+          if (hotfixCompare < 0 || (includeTarget && hotfixCompare === 0)) result.push(versionPartsToCode(hotfixParts));
+        }
+      }
+    }
+  }
+  return result;
 }
 
 function toVersionConditionArray(rows: Array<{ field: string; op: string; value: string }>) {
   const versionRows = rows.filter((row) => row.field === "version" && row.value.trim());
   if (!versionRows.length) return [];
-  const exactRanges: number[] = [];
-  let minVersion = 0;
-  let maxVersion = Number.MAX_SAFE_INTEGER;
+  let selected: number[] | null = null;
   for (const row of versionRows) {
-    const codes = String(row.value ?? "")
+    const partsList = String(row.value ?? "")
       .split(/[\s,，;；]+/)
-      .map((item) => versionTextToCode(item))
-      .filter((item): item is number => item !== null);
-    if (!codes.length) return [];
+      .map((item) => versionInputToParts(item, row.op))
+      .filter((item): item is number[] => Boolean(item));
+    if (!partsList.length) return [];
+    let rowCodes: number[] = [];
     if (row.op === "=") {
-      exactRanges.push(...codes.flatMap((code) => [code, code * 100 + 1]));
-    } else if (row.op === ">=") {
-      minVersion = Math.max(minVersion, Math.min(...codes));
-    } else if (row.op === "<=") {
-      maxVersion = Math.min(maxVersion, Math.max(...codes) * 100 + 1);
+      rowCodes = partsList.map(versionPartsToCode);
+    } else if (row.op === "<=" || row.op === "<") {
+      rowCodes = Array.from(new Set(partsList.flatMap((parts) => enumerateVersionsUpTo(parts, row.op === "<="))));
+    } else {
+      return [];
     }
+    const rowSet = new Set<number>(rowCodes);
+    selected = selected ? selected.filter((code) => rowSet.has(code)) : rowCodes;
   }
-  const range = minVersion || maxVersion !== Number.MAX_SAFE_INTEGER ? [minVersion, maxVersion === Number.MAX_SAFE_INTEGER ? 4_294_967_295 : maxVersion] : [];
-  if (!exactRanges.length) return range;
-  if (!range.length) return exactRanges;
-  const intersected: number[] = [];
-  for (let index = 0; index < exactRanges.length; index += 2) {
-    const begin = Math.max(exactRanges[index], range[0]);
-    const end = Math.min(exactRanges[index + 1], range[1]);
-    if (end > begin) intersected.push(begin, end);
-  }
-  return intersected;
+  return Array.from(new Set(selected ?? [])).sort((a, b) => a - b);
 }
 
 function versionCodeToText(value: unknown) {
@@ -552,6 +594,10 @@ function versionCodeToText(value: unknown) {
 }
 
 function formatVersionConditionList(values: unknown[]) {
+  if (values.length > 30) {
+    const numbers = values.map((value) => Number(value)).filter((value) => Number.isFinite(value)).sort((a, b) => a - b);
+    if (numbers.length) return [`${versionCodeToText(numbers[0])} - ${versionCodeToText(numbers[numbers.length - 1])}`];
+  }
   const formatted: string[] = [];
   for (let index = 0; index < values.length; index += 1) {
     const current = Number(values[index]);
@@ -766,6 +812,12 @@ function getArray(value: unknown): unknown[] {
   return Array.isArray(value) ? value : [];
 }
 
+function chunkArray<T>(items: T[], size: number) {
+  const chunks: T[][] = [];
+  for (let index = 0; index < items.length; index += size) chunks.push(items.slice(index, index + size));
+  return chunks;
+}
+
 function getApiData(payload: unknown) {
   return getObject(getObject(payload)?.data) ?? getObject(payload);
 }
@@ -836,7 +888,7 @@ function playerMatchesMailConditions(player: Record<string, unknown>, conditionR
       const versions = toVersionConditionArray([row]);
       const version = parseFlexibleNumber(String(player.Version ?? player.AppVersion ?? player.Ver ?? ""));
       if (!versions.length || !Number.isFinite(version)) return false;
-      const matched = versions.some((item, index) => index % 2 === 0 ? version >= item && version < (versions[index + 1] ?? item + 1) : false);
+      const matched = versions.includes(version);
       if (!matched) return false;
     }
   }
@@ -2378,6 +2430,54 @@ function MailSuitePage({ active, canUploadItemTable, postWithToken, session, set
             setLocalMailRows((current) => [localRow, ...current.filter((row) => String(row.Id) !== String(localRow.Id))].slice(0, 50));
             return message;
           }
+          const versionTargets = getArray(serverBody.Version).map((item) => Number(item)).filter((item) => Number.isFinite(item));
+          const versionChunks = versionTargets.length > 2000 ? chunkArray(versionTargets, 2000) : [];
+          if (Number(serverBody.Typ) === 1 && versionChunks.length > 1) {
+            const successes: Array<{ chunk: number[]; data: Record<string, unknown> | null }> = [];
+            const failures: string[] = [];
+            setStatus(`正在按版本分片发送：0/${versionChunks.length}`);
+            for (const [index, versionChunk] of versionChunks.entries()) {
+              try {
+                const result = await postWithToken("/gmMailAdd", { ...serverBody, Version: versionChunk });
+                const error = apiBusinessError(result);
+                if (error) {
+                  failures.push(error);
+                } else {
+                  successes.push({ chunk: versionChunk, data: getApiData(result.payload) });
+                }
+              } catch (sendError) {
+                failures.push(sendError instanceof Error ? sendError.message : "发送失败");
+              }
+              setStatus(`正在按版本分片发送：${index + 1}/${versionChunks.length}，成功 ${successes.length}，失败 ${failures.length}`);
+            }
+            if (!successes.length) {
+              const firstError = failures[0] || "没有版本分片发送成功";
+              throw new Error(`邮件提交失败：${firstError}`);
+            }
+            const firstData = successes[0]?.data ?? null;
+            const localRow = {
+              ...submitted,
+              ...(firstData ?? {}),
+              Id: String(firstData?.Id ?? submitted.Id ?? `local-${Date.now()}`),
+              Version: versionTargets,
+              RegtEnd: firstData?.RegtEnd ?? submitted.Regt,
+              CreateTime: firstData?.CreateTime ?? Math.floor(Date.now() / 1000),
+              __targetSummary: `全服，版本分片 ${successes.length}/${versionChunks.length} 成功`,
+              __local: !firstData?.Id,
+              __claimed: false,
+            };
+            const message = failures.length
+              ? `邮件已按版本分片发送，成功 ${successes.length} 包，失败 ${failures.length} 包`
+              : `邮件已按版本分片发送，成功 ${successes.length} 包`;
+            setStatus(message);
+            setView("list");
+            setEditingMailRow(undefined);
+            setLocalMailRows((current) => [localRow, ...current.filter((row) => String(row.Id) !== String(localRow.Id))].slice(0, 20));
+            await refreshMailList();
+            if (active !== "mailGlobal") setActive("mailGlobal");
+            setStatus(message);
+            return message;
+          }
           const serverMailTargets = Number(serverBody.Typ) === 2 ? getArray(serverBody.TargetID).map((item) => Number(item)).filter((item) => Number.isFinite(item)) : [];
           if (serverMailTargets.length > 1) {
             const successes: Array<{ targetId: number; data: Record<string, unknown> | null }> = [];
@@ -2689,6 +2789,13 @@ function formatPlatformList(value?: string) {
     .join(", ");
 }
 
+function conditionOperatorOptions(field: string) {
+  if (field === "version") return ["=", "<", "<="];
+  if (field === "regTime") return [">=", "<="];
+  if (field === "server") return ["=", ">=", "<="];
+  return ["="];
+}
+
 function serverConditionIds(rows: Array<{ field: string; op: string; value: string }>, serverOptions: ServerOption[]) {
   const serverRows = rows.filter((row) => row.field === "server" && row.value.trim());
   if (!serverRows.length) return [];
@@ -2837,7 +2944,7 @@ function MailEditor({ canUploadItemTable, global, initialMail, items, onBack, on
       return;
     }
     if (conditionRows.some((row) => row.field === "version" && row.value.trim() && !toVersionConditionArray([row]).length)) {
-      setError("APP版本请填写 x.x.x 或 x.x.x.x 格式，例如 1.8.0.0");
+      setError("APP版本请填写 x.x、x.x.x 或 x.x.x.x 格式，例如 1.8 或 1.8.0.0");
       return;
     }
     if (conditionRows.some((row) => row.field === "system" && row.value.trim() && !toPlatformNumberArray(row.value).length)) {
@@ -2937,9 +3044,7 @@ function MailEditor({ canUploadItemTable, global, initialMail, items, onBack, on
                         const nextOp = event.target.value;
                         setFilterRows((current) => current.map((item) => item.id === row.id ? { ...item, op: nextOp, value: item.value || defaultFilterValue(item.field, nextOp) } : item));
                       }}>
-                        {row.field !== "regTime" && <option value="=">=</option>}
-                        <option value=">=">&gt;=</option>
-                        <option value="<=">&lt;=</option>
+                        {conditionOperatorOptions(row.field).map((op) => <option key={op} value={op}>{op}</option>)}
                       </select>
                     ) : (
                       <select className="mail-condition-expression" value="=" onChange={() => undefined}>
@@ -2957,7 +3062,7 @@ function MailEditor({ canUploadItemTable, global, initialMail, items, onBack, on
                     ) : row.field === "server" && serverOptions.length ? (
                       <ServerCascadeSelect options={serverOptions} value={row.value} onChange={(nextValue) => setFilterRows((current) => current.map((item) => item.id === row.id ? { ...item, value: nextValue } : item))} />
                     ) : (
-                      <input disabled={unsupported} value={row.value} onChange={(event) => setFilterRows((current) => current.map((item) => item.id === row.id ? { ...item, value: event.target.value } : item))} placeholder={unsupported ? "当前接口暂未开放" : row.field === "version" ? "例如 1.8.0.0" : row.field === "server" ? "例如 12 或 1,2" : "例如 1,2"} />
+                      <input disabled={unsupported} value={row.value} onChange={(event) => setFilterRows((current) => current.map((item) => item.id === row.id ? { ...item, value: event.target.value } : item))} placeholder={unsupported ? "当前接口暂未开放" : row.field === "version" ? "例如 1.8 或 1.8.0.0" : row.field === "server" ? "例如 12 或 1,2" : "例如 1,2"} />
                     )}
                     <button className="mail-condition-remove" onClick={() => setFilterRows((current) => current.filter((item) => item.id !== row.id))} type="button">删除</button>
                   </div>
@@ -3077,7 +3182,7 @@ function ItemInput({ items, onChange, value }: { items: ItemOption[]; onChange: 
 
 function MailTemplateList({ onCreate, onDelete, onEdit, query, setQuery, templates }: { onCreate: () => void; onDelete: (template: MailTemplate) => Promise<void>; onEdit: (template: MailTemplate) => void; query: string; setQuery: (value: string) => void; templates: MailTemplate[] }) {
   const rows = templates.filter((template) => !query.trim() || template.name.includes(query.trim()));
-  return <section className="mail-page"><div className="mail-filter-line"><label>模板名称：<input value={query} onChange={(event) => setQuery(event.target.value)} /></label><button type="button"><Search size={14} />Search</button></div><section className="mail-table-card"><button className="mail-primary-button" onClick={onCreate} type="button">新建</button><MailDataTable columns={["ID", "名称", "标题", "创建时间", "更新时间", "操作"]} rows={rows.map((template) => ({ ID: template.id, 名称: <span className="mail-ellipsis-cell" title={template.name}>{template.name}</span>, 标题: <span className="mail-ellipsis-cell" title={templatePrimaryContent(template).title}>{templatePrimaryContent(template).title || "暂无数据"}</span>, 创建时间: formatTimestampValue(template.createdAt), 更新时间: formatTimestampValue(template.updatedAt), 操作: <div className="mail-action-buttons"><button onClick={() => onEdit(template)} type="button">编辑</button><button onClick={() => void onDelete(template)} type="button">删除</button></div> }))} /></section></section>;
+  return <section className="mail-page"><div className="mail-filter-line"><label>模板名称：<input value={query} onChange={(event) => setQuery(event.target.value)} /></label><button type="button"><Search size={14} />Search</button></div><section className="mail-table-card"><button className="mail-primary-button" onClick={onCreate} type="button">新建</button><MailDataTable columns={["ID", "名称", "创建时间", "更新时间", "操作"]} rows={rows.map((template) => ({ ID: template.id, 名称: <span className="mail-ellipsis-cell" title={template.name}>{template.name}</span>, 创建时间: formatTimestampValue(template.createdAt), 更新时间: formatTimestampValue(template.updatedAt), 操作: <div className="mail-action-buttons"><button onClick={() => onEdit(template)} type="button">编辑</button><button onClick={() => void onDelete(template)} type="button">删除</button></div> }))} /></section></section>;
 }
 
 function MailTemplateEditor({ endpoint = "/local-api/mail-templates", kind = "邮件", onBack, onSaved, template }: { endpoint?: string; kind?: "邮件" | "公告"; onBack: () => void; onSaved: () => void; template?: MailTemplate }) {
@@ -3681,7 +3786,7 @@ function NoticePage({ postWithToken }: { postWithToken: (endpoint: string, body:
       return;
     }
     if (conditionRows.some((row) => row.field === "version" && row.value.trim() && !toVersionConditionArray([row]).length)) {
-      setStatus("公告保存失败：版本请填写 x.x.x 或 x.x.x.x，例如 1.8.0.0");
+      setStatus("公告保存失败：版本请填写 x.x、x.x.x 或 x.x.x.x，例如 1.8 或 1.8.0.0");
       return;
     }
     if (conditionRows.some((row) => row.field === "system" && row.value.trim() && !toPlatformNumberArray(row.value).length)) {
@@ -3823,9 +3928,7 @@ function NoticePage({ postWithToken }: { postWithToken: (endpoint: string, body:
                           const nextOp = event.target.value;
                           setForm({ ...form, conditions: noticeConditionRows.map((item) => item.id === row.id ? { ...item, op: nextOp, value: item.value || noticeDefaultConditionValue(item.field, nextOp) } : item) });
                         }}>
-                          {row.field !== "regTime" && <option value="=">=</option>}
-                          <option value=">=">&gt;=</option>
-                          <option value="<=">&lt;=</option>
+                          {conditionOperatorOptions(row.field).map((op) => <option key={op} value={op}>{op}</option>)}
                         </select>
                       ) : (
                         <select className="mail-condition-expression" value="=" onChange={() => undefined}><option value="=">=</option></select>
@@ -3841,7 +3944,7 @@ function NoticePage({ postWithToken }: { postWithToken: (endpoint: string, body:
                       ) : row.field === "server" && serverOptions.length ? (
                         <ServerCascadeSelect options={serverOptions} value={row.value} onChange={(nextValue) => setForm({ ...form, conditions: noticeConditionRows.map((item) => item.id === row.id ? { ...item, value: nextValue } : item) })} />
                       ) : (
-                        <input value={row.value} onChange={(event) => setForm({ ...form, conditions: noticeConditionRows.map((item) => item.id === row.id ? { ...item, value: event.target.value } : item) })} placeholder={row.field === "version" ? "例如 1.8.0.0" : row.field === "server" ? "例如 12 或 1,2" : "例如 1,2"} />
+                        <input value={row.value} onChange={(event) => setForm({ ...form, conditions: noticeConditionRows.map((item) => item.id === row.id ? { ...item, value: event.target.value } : item) })} placeholder={row.field === "version" ? "例如 1.8 或 1.8.0.0" : row.field === "server" ? "例如 12 或 1,2" : "例如 1,2"} />
                       )}
                       <button className="mail-condition-remove" onClick={() => setForm({ ...form, conditions: noticeConditionRows.filter((item) => item.id !== row.id) })} type="button">删除</button>
                     </div>
