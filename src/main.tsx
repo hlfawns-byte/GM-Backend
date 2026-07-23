@@ -933,6 +933,9 @@ function playerMatchesMailConditions(player: Record<string, unknown>, conditionR
 }
 
 function humanizeApiError(message: string) {
+  if (/(?:Et|过期时间).*(?:当前时间|生效时间|发送时间).*(?:10\s*分钟|间隔|太短|过近)|(?:10\s*分钟|间隔太短).*(?:Et|过期时间)/i.test(message)) {
+    return "过期时间间隔太短，请将过期时间设置为发送时间至少 11 分钟后";
+  }
   const missingServerId = message.match(/(?:id|SvrId)\[(\d+)\].*(?:服务器不存在|不存在|未运行)/i);
   if (missingServerId) {
     const serverId = Number(missingServerId[1]);
@@ -943,7 +946,6 @@ function humanizeApiError(message: string) {
   if (/Platform|平台/i.test(message)) return "系统条件未填写，或选择的系统不支持";
   if (/Version|版本/i.test(message)) return "版本条件未填写，或版本格式不正确";
   if (/参数错误/.test(message)) return "条件参数填写不完整，请检查区服、系统、版本和时间";
-  if (/Et.*当前时间.*10分钟/.test(message)) return "过期时间至少要比现在晚 10 分钟";
   if (/St.*大于.*0/.test(message)) return "当前接口暂不支持定时生效，请先用立即生效";
   if (/is not exist this key/i.test(message)) return "正式服没有查到这个 UID 对应的账号，请确认 UID 是否属于当前区服/正式服";
   return message;
@@ -1840,15 +1842,26 @@ function PlayerInfoPage({ postWithToken }: { postWithToken: (endpoint: string, b
   const info = getObject(data?.Info);
   const extra = getObject(data?.Extra)
     ?? getObject(data?.extra)
+    ?? getObject(data?.Info2)
+    ?? getObject(data?.info2)
     ?? getObject(data?.GmExtra)
     ?? getObject(data?.gmExtra)
     ?? getObject(data?.PlayerInfoExtra)
     ?? getObject(data?.playerInfoExtra)
     ?? getObject(info?.Extra)
-    ?? getObject(info?.extra);
+    ?? getObject(info?.extra)
+    ?? getObject(info?.Info2)
+    ?? getObject(info?.info2);
   const extraValue = (...keys: string[]) => {
     for (const key of keys) {
       const value = extra?.[key] ?? data?.[key] ?? info?.[key];
+      if (value !== undefined && value !== null && value !== "") return value;
+    }
+    return undefined;
+  };
+  const dataValue = (...keys: string[]) => {
+    for (const key of keys) {
+      const value = data?.[key] ?? info?.[key] ?? extra?.[key];
       if (value !== undefined && value !== null && value !== "") return value;
     }
     return undefined;
@@ -1858,7 +1871,8 @@ function PlayerInfoPage({ postWithToken }: { postWithToken: (endpoint: string, b
   const platformValue = extraValue("platform", "Platform");
   const platformName = Number(platformValue) === 1 ? "GooglePlay" : Number(platformValue) === 2 ? "iOS" : platformValue;
   const clientVersionValue = extraValue("clientVersion", "ClientVersion", "client_version");
-  const firstUserId = data?.UserId ?? info?.uid ?? filters.userId;
+  const onlineValue = extraValue("online", "Online");
+  const firstUserId = dataValue("UserId", "UID", "uid", "Uid") ?? filters.userId;
   const desc = typeof data?.Desc === "string" ? data.Desc : "";
   const mapAttribValue = getObject(info?.mapAttribValue);
   const mapAttribBase = getObject(info?.mapAttribBase);
@@ -1871,14 +1885,13 @@ function PlayerInfoPage({ postWithToken }: { postWithToken: (endpoint: string, b
       troopIds: getArray(formationObject?.troopIds).join(", "),
     };
   });
-  const clothes = Object.entries(getObject(info?.mapClothes) ?? {}).map(([id, item]) => {
+  const gears = Object.entries(getObject(info?.mapGear) ?? {}).map(([site, item]) => {
     const itemObject = getObject(item);
-    const using = getArray(info?.putClotheSites).some((site) => Number(getObject(site)?.clothesId) === Number(id));
     return {
-      id,
-      name: "暂未开放",
-      level: formatCell(itemObject?.position),
-      using: using ? "是" : "否",
+      id: itemObject?.id ?? site,
+      name: itemObject?.id ?? site,
+      level: formatCell(itemObject?.lvl),
+      using: "是",
     };
   });
   const heroes = Object.entries(mapUnitLvl ?? {}).map(([id, level]) => ({
@@ -1901,16 +1914,16 @@ function PlayerInfoPage({ postWithToken }: { postWithToken: (endpoint: string, b
   const summaryRows = data
     ? [{
       userPid: firstUserId,
-      deviceId: data.DeviceId,
-      platformUid: data.AccId,
+      deviceId: dataValue("DeviceId", "deviceId"),
+      platformUid: dataValue("AccId", "AccountId", "platformUid", "PlatformUid"),
       registerTime: formatTimestampValue(extraValue("reg", "Reg", "RegTime", "regTime")),
       lastLoginTime: formatTimestampValue(extraValue("out", "Out", "LastLoginTime", "lastLoginTime")),
     }]
     : [];
   const infoCells: Array<[string, unknown]> = [
     ["用户PID", firstUserId],
-    ["deviceId", data?.DeviceId],
-    ["platformUid", data?.AccId],
+    ["deviceId", dataValue("DeviceId", "deviceId")],
+    ["platformUid", dataValue("AccId", "AccountId", "platformUid", "PlatformUid")],
     ["金币", extraValue("goldNum", "GoldNum") ?? mapAttribValue?.["4"] ?? data?.Gold],
     ["钻石", extraValue("diamondNum", "DiamondNum") ?? data?.Diamond],
     ["点券", extraValue("couponNum", "CouponNum")],
@@ -1919,24 +1932,24 @@ function PlayerInfoPage({ postWithToken }: { postWithToken: (endpoint: string, b
     ["等级", info?.lvl ?? info?.grade ?? data?.Level],
     ["注册时间", formatTimestampValue(extraValue("reg", "Reg", "RegTime", "regTime"))],
     ["最后登出时间", formatTimestampValue(extraValue("out", "Out", "LastLoginTime", "lastLoginTime"))],
-    ["国家", data?.Country],
+    ["国家", dataValue("Country", "country")],
     ["状态", desc || data?.State],
-    ["在线状态", typeof extraValue("online", "Online") === "boolean" ? extraValue("online", "Online") ? "在线" : "离线" : extraValue("online", "Online")],
-    ["是否付费", data?.IsPay],
+    ["在线状态", typeof onlineValue === "boolean" ? onlineValue ? "在线" : "离线" : onlineValue],
+    ["是否付费", dataValue("IsPay", "isPay")],
     ["总充值金额", extraValue("cntCharge", "CntCharge") ?? data?.PayTotal],
-    ["总消耗钻石数量", data?.CostDiamond],
-    ["总消耗金币数量", data?.CostGold],
+    ["总消耗钻石数量", dataValue("CostDiamond", "costDiamond")],
+    ["总消耗金币数量", dataValue("CostGold", "costGold")],
     ["关卡ID", info?.maxChapter ?? data?.StageId],
     ["系统标识", platformName ?? data?.System],
     ["玩家语言", languageName],
     ["客户端通信版本号", clientVersionValue !== undefined ? versionCodeToText(clientVersionValue) : data?.ClientVersion],
     ["头像ID", info?.head],
     ["头像框ID", info?.headFrameId],
+    ["称号ID", info?.titleId],
     ["战力", info?.combatPower],
     ["当前地图ID", info?.mapid],
     ["当前英雄ID", info?.heroId ?? info?.idHeroUsing],
     ["竞技场排名", Number(info?.arenaRank) === 4294967295 ? "未上榜" : info?.arenaRank],
-    ["JSON", payload ? JSON.stringify(payload) : ""],
   ];
   const tabs = ["用户信息", "用户订单", "预下单", "用户行为", "封号日志", "禁赛日志", "月卡"];
 
@@ -1963,7 +1976,7 @@ function PlayerInfoPage({ postWithToken }: { postWithToken: (endpoint: string, b
       </section>
 
       <PlayerSectionTable title="游戏角色" columns={["角色ID", "角色名称", "星级", "正在使用"]} keys={["id", "name", "star", "using"]} rows={heroes} />
-      <PlayerSectionTable title="角色装备" columns={["装备ID", "装备名称", "等级", "正在使用"]} keys={["id", "name", "level", "using"]} rows={clothes} />
+      <PlayerSectionTable title="角色装备" columns={["装备ID", "装备名称", "等级", "正在使用"]} keys={["id", "name", "level", "using"]} rows={gears} />
       <PlayerSectionTable title="角色符文" columns={["符文ID", "符文名称", "正在使用"]} keys={["id", "name", "using"]} rows={runeRows} />
     </section>
   );
@@ -2491,6 +2504,15 @@ function MailSuitePage({ active, canUploadItemTable, postWithToken, session, set
           const serverBody: Record<string, unknown> = { ...submitted };
           delete serverBody.__conditionRows;
           const isPersonalMailSubmit = Number(serverBody.Typ) === 3;
+          const submitNowSeconds = Math.floor(Date.now() / 1000);
+          const submitStartSeconds = Number(serverBody.St);
+          const submitEndSeconds = Number(serverBody.Et);
+          const effectiveStartSeconds = Number.isFinite(submitStartSeconds) && submitStartSeconds > submitNowSeconds
+            ? submitStartSeconds
+            : submitNowSeconds;
+          if (!Number.isFinite(submitEndSeconds) || submitEndSeconds <= effectiveStartSeconds + 10 * 60) {
+            throw new Error("过期时间间隔太短，请将过期时间设置为发送时间至少 11 分钟后");
+          }
           if (isPersonalMailSubmit) {
             const targets = getArray(serverBody.TargetID).map((item) => Number(item)).filter((item) => Number.isFinite(item));
             const infoResult = await postWithToken("/gmPlayerInfo", { Typ: 1, UserId: targets });
@@ -3153,11 +3175,11 @@ function MailEditor({ canUploadItemTable, global, initialMail, items, onBack, on
       return;
     }
     if (sendMode === "scheduled" && endSeconds <= startSeconds + 10 * 60) {
-      setError("过期时间必须比定时发送时间晚超过 10 分钟，建议至少晚 11 分钟");
+      setError("过期时间间隔太短，请将过期时间设置为发送时间至少 11 分钟后");
       return;
     }
     if (sendMode !== "scheduled" && endSeconds <= nowSeconds + 10 * 60) {
-      setError("过期时间必须比现在晚超过 10 分钟，建议至少晚 11 分钟");
+      setError("过期时间间隔太短，请将过期时间设置为发送时间至少 11 分钟后");
       return;
     }
     const mailTyp = isGlobalMail ? serverTargetIds.length && !serverTargetsCoverAll ? 2 : 1 : 3;
