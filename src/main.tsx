@@ -736,6 +736,11 @@ async function parseMailTemplateFile(file: File) {
 }
 
 function parseFlexibleNumber(value: string) {
+  const normalized = value.trim().toUpperCase();
+  const glMatch = normalized.match(/^GL-?(\d+)$/);
+  if (glMatch) return Number(glMatch[1]);
+  const tkMatch = normalized.match(/^TK-?(\d+)$/);
+  if (tkMatch) return Number(tkMatch[1]) + 123;
   if (/^\d+(?:\.\d+){2,3}$/.test(value)) {
     const parts = value.split(".").map((part) => Number(part));
     if (parts.every((part) => Number.isInteger(part) && part >= 0 && part <= 99)) {
@@ -839,7 +844,7 @@ function playerMatchesMailConditions(player: Record<string, unknown>, conditionR
 }
 
 function humanizeApiError(message: string) {
-  if (/id\[\d+\].*服务器不存在/.test(message) || /服务器不存在/.test(message)) return "区服未填写，或填写的区服不存在";
+  if (/id\[\d+\].*服务器不存在/.test(message) || /服务器不存在/.test(message)) return "区服不存在，或选择的区服范围包含当前服务器未开放的区服";
   if (/TargetID|UserId|用户.*不存在|玩家.*不存在/i.test(message)) return "用户ID未填写，或用户不存在";
   if (/Platform|平台/i.test(message)) return "系统条件未填写，或选择的系统不支持";
   if (/Version|版本/i.test(message)) return "版本条件未填写，或版本格式不正确";
@@ -1667,6 +1672,7 @@ function GameSelectScreen({ auth, games, onEnter, onLogout, onManageAccounts, on
                       <div className="game-logo">{primaryGame.iconUrl ? <img alt={`${group.name} icon`} src={primaryGame.iconUrl} /> : primaryGame.logo}</div>
                       <div className="game-meta">
                         <strong>{group.name}</strong>
+                        <small>{group.games.length} 个区服</small>
                         <div className="game-server-links">
                           {group.games.map((game) => {
                             const key = `${game.name}/${game.serverName}`;
@@ -1678,7 +1684,6 @@ function GameSelectScreen({ auth, games, onEnter, onLogout, onManageAccounts, on
                           })}
                         </div>
                       </div>
-                      <small>{group.games.length} 个区服</small>
                     </div>
                   </article>
                 );
@@ -2254,6 +2259,22 @@ function MailSuitePage({ active, canUploadItemTable, postWithToken, session, set
     setItems(payload.items ?? []);
     setStatus(`道具表已导入，共 ${payload.items?.length ?? 0} 个道具`);
   };
+  const recallEditingMail = async () => {
+    if (!editingMailRow) return;
+    const id = String(editingMailRow.Id ?? editingMailRow.id ?? "");
+    if (!id) return;
+    if (editingMailRow.__scheduled) {
+      const response = await fetch(`/local-api/scheduled-mails/${encodeURIComponent(id)}`, { method: "DELETE" });
+      const payload = (await response.json().catch(() => ({}))) as { error?: string };
+      if (!response.ok) throw new Error(payload.error || "原定时邮件撤回失败");
+      setLocalMailRows((current) => current.filter((row) => String(row.Id) !== id));
+      return;
+    }
+    const result = await postWithToken("/gmMailDel", { Id: id });
+    const error = apiBusinessError(result);
+    if (error) throw new Error(`原邮件撤回失败：${error}`);
+    setLocalMailRows((current) => current.filter((row) => String(row.Id) !== id));
+  };
 
   if (active === "mailTemplate") {
     return view === "edit"
@@ -2330,6 +2351,10 @@ function MailSuitePage({ active, canUploadItemTable, postWithToken, session, set
           }
           const startSeconds = Number(submitted.St);
           const isScheduled = Number.isFinite(startSeconds) && startSeconds > Math.floor(Date.now() / 1000) + 5;
+          if (editingMailRow) {
+            setStatus("正在撤回原邮件...");
+            await recallEditingMail();
+          }
           if (isScheduled) {
             const response = await fetch("/local-api/scheduled-mails", {
               method: "POST",
@@ -2351,6 +2376,67 @@ function MailSuitePage({ active, canUploadItemTable, postWithToken, session, set
             setView("list");
             setEditingMailRow(undefined);
             setLocalMailRows((current) => [localRow, ...current.filter((row) => String(row.Id) !== String(localRow.Id))].slice(0, 50));
+            return message;
+          }
+          const serverMailTargets = Number(serverBody.Typ) === 2 ? getArray(serverBody.TargetID).map((item) => Number(item)).filter((item) => Number.isFinite(item)) : [];
+          if (serverMailTargets.length > 1) {
+            const successes: Array<{ targetId: number; data: Record<string, unknown> | null }> = [];
+            const failures: Array<{ targetId: number; error: string }> = [];
+            let cursor = 0;
+            let completed = 0;
+            const concurrency = 8;
+            setStatus(`正在发送区服邮件：0/${serverMailTargets.length}`);
+            const sendOne = async (targetId: number) => {
+              try {
+                const result = await postWithToken("/gmMailAdd", { ...serverBody, TargetID: [targetId] });
+                const error = apiBusinessError(result);
+                if (error) {
+                  failures.push({ targetId, error });
+                } else {
+                  successes.push({ targetId, data: getApiData(result.payload) });
+                }
+              } catch (sendError) {
+                failures.push({ targetId, error: sendError instanceof Error ? sendError.message : "发送失败" });
+              } finally {
+                completed += 1;
+                setStatus(`正在发送区服邮件：${completed}/${serverMailTargets.length}，成功 ${successes.length}，失败 ${failures.length}`);
+              }
+            };
+            const workers = Array.from({ length: Math.min(concurrency, serverMailTargets.length) }, async () => {
+              while (cursor < serverMailTargets.length) {
+                const targetId = serverMailTargets[cursor];
+                cursor += 1;
+                await sendOne(targetId);
+              }
+            });
+            await Promise.all(workers);
+            if (!successes.length) {
+              const firstError = failures[0]?.error || "没有区服发送成功";
+              throw new Error(`邮件提交失败：${firstError}`);
+            }
+            const firstData = successes[0]?.data ?? null;
+            const successRange = formatServerRange(successes.map((item) => item.targetId));
+            const localRow = {
+              ...submitted,
+              ...(firstData ?? {}),
+              Id: String(firstData?.Id ?? submitted.Id ?? `local-${Date.now()}`),
+              TargetID: successes.map((item) => item.targetId),
+              RegtEnd: firstData?.RegtEnd ?? submitted.Regt,
+              CreateTime: firstData?.CreateTime ?? Math.floor(Date.now() / 1000),
+              __targetSummary: `${successRange || "指定区服"} 成功`,
+              __local: !firstData?.Id,
+              __claimed: false,
+            };
+            const message = failures.length
+              ? `邮件已发送到 ${successes.length} 个区服，${failures.length} 个区服未发送`
+              : `邮件已发送到 ${successes.length} 个区服`;
+            setStatus(message);
+            setView("list");
+            setEditingMailRow(undefined);
+            setLocalMailRows((current) => [localRow, ...current.filter((row) => String(row.Id) !== String(localRow.Id))].slice(0, 20));
+            await refreshMailList();
+            if (active !== "mailGlobal") setActive("mailGlobal");
+            setStatus(message);
             return message;
           }
           const result = await postWithToken("/gmMailAdd", serverBody);
@@ -2481,7 +2567,7 @@ function MailListPage({ active, localMailRows, mailRows, onClearStatus, onCreate
               目标: <MailTargetSummary row={row} serverOptions={serverOptions} />,
               状态: statusText,
               时间: <span className="mail-time-cell"><span>注册开始: {formatMailListTime(row.RegtBegin, "2020-01-01 00:00")}</span><span>注册结束: {formatMailListTime(regEnd, defaultMailRegEndDisplay())}</span><span>生效时间: {formatMailListTime(row.St, "立即生效")}</span><span>过期时间: {formatMailListTime(row.Et, "2050-12-31 23:59")}</span><span>创建时间: {formatMailListTime(rawCreatedAt, createdAtFallback)}</span></span>,
-              操作: <div className="mail-action-buttons"><button disabled title="邮件编辑功能暂时关闭" type="button">编辑</button><button onClick={() => void onDelete(id)} type="button">撤回</button></div>,
+              操作: <div className="mail-action-buttons"><button onClick={() => onEdit(row)} type="button">编辑</button><button onClick={() => void onDelete(id)} type="button">撤回</button></div>,
             };
           })}
         />
@@ -2528,14 +2614,15 @@ function PaginatedMailDataTable({ columns, pageSize = 20, rows }: { columns: str
 }
 
 function MailTargetSummary({ row, serverOptions }: { row: Record<string, unknown>; serverOptions: ServerOption[] }) {
+  const targetSummary = String(row.__targetSummary ?? "").trim();
   const targetIds = getArray(row.TargetID);
   const typ = Number(row.Typ);
   const isServerMail = typ === 2;
   const isPersonalMail = typ === 3 || (!typ && targetIds.length > 0);
   const targetText = targetIds.length
-    ? isServerMail
+    ? targetSummary || (isServerMail
       ? targetIds.map((targetId) => serverOptions.find((server) => server.id === Number(targetId))?.name ?? gameServerDisplayName(targetId)).join(", ")
-      : `用户 ${formatCell(row.TargetID)}`
+      : `用户 ${formatCell(row.TargetID)}`)
     : isPersonalMail
       ? "未填写用户"
       : "全服";
@@ -2585,6 +2672,14 @@ function formatServerIdList(value?: string) {
     .join(", ");
 }
 
+function formatServerRange(ids: number[]) {
+  const sorted = ids.filter((id) => Number.isFinite(id)).sort((a, b) => a - b);
+  if (!sorted.length) return "";
+  const first = gameServerDisplayName(sorted[0]);
+  const last = gameServerDisplayName(sorted[sorted.length - 1]);
+  return first === last ? first : `${first} - ${last}`;
+}
+
 function formatPlatformList(value?: string) {
   return String(value ?? "")
     .split(/[\s,，;；]+/)
@@ -2619,13 +2714,15 @@ function serverConditionIds(rows: Array<{ field: string; op: string; value: stri
 
 function MailEditor({ canUploadItemTable, global, initialMail, items, onBack, onSubmit, onUploadItemTable, rewardTemplates, serverOptions, templates }: { canUploadItemTable: boolean; global: boolean; initialMail?: Record<string, unknown>; items: ItemOption[]; onBack: () => void; onSubmit: (body: unknown) => Promise<string | void>; onUploadItemTable: (file: File) => Promise<void>; rewardTemplates: RewardTemplate[]; serverOptions: ServerOption[]; templates: MailTemplate[] }) {
   const now = new Date();
-  const [mailType, setMailType] = React.useState(global ? "global" : "personal");
+  const initialTyp = Number(initialMail?.Typ);
+  const initialTargetIds = getArray(initialMail?.TargetID);
+  const [mailType, setMailType] = React.useState(initialMail ? initialTyp === 3 || (!initialTyp && initialTargetIds.length > 0) ? "personal" : "global" : global ? "global" : "personal");
   const [templateId, setTemplateId] = React.useState("custom");
   const [rewardTemplateId, setRewardTemplateId] = React.useState("custom");
   const [rewardMode, setRewardMode] = React.useState<"none" | "reward">(() => getArray(initialMail?.ItemLst).length ? "reward" : "none");
   const [title, setTitle] = React.useState(String(initialMail?.Titel ?? initialMail?.Title ?? ""));
   const [body, setBody] = React.useState(String(initialMail?.Body ?? ""));
-  const [targetIds, setTargetIds] = React.useState(getArray(initialMail?.TargetID).join(","));
+  const [targetIds, setTargetIds] = React.useState(initialTyp === 3 ? initialTargetIds.join(",") : "");
   const [sendMode, setSendMode] = React.useState<"now" | "scheduled">(initialMail?.__scheduled ? "scheduled" : "now");
   const [rewards, setRewards] = React.useState<MailRewardItem[]>(() => {
     const raw = getArray(initialMail?.ItemLst);
@@ -2639,7 +2736,21 @@ function MailEditor({ canUploadItemTable, global, initialMail, items, onBack, on
   });
   const [startTime, setStartTime] = React.useState(secondsToDatetimeLocal(initialMail?.St) || toDatetimeLocal(now));
   const [endTime, setEndTime] = React.useState(secondsToDatetimeLocal(initialMail?.Et) || MAIL_DEFAULT_EXPIRE);
-  const [filterRows, setFilterRows] = React.useState<Array<{ id: number; field: string; op: string; value: string }>>([]);
+  const [filterRows, setFilterRows] = React.useState<Array<{ id: number; field: string; op: string; value: string }>>(() => {
+    if (!initialMail) return [];
+    const rows: Array<{ id: number; field: string; op: string; value: string }> = [];
+    let id = 1;
+    if (initialTyp === 2 && initialTargetIds.length) rows.push({ id: id++, field: "server", op: "=", value: initialTargetIds.join(",") });
+    const platforms = getArray(initialMail.Platform).map(String).filter(Boolean);
+    if (platforms.length) rows.push({ id: id++, field: "system", op: "=", value: platforms.join(",") });
+    const versions = formatVersionConditionList(getArray(initialMail.Version)).filter(Boolean);
+    if (versions.length) rows.push({ id: id++, field: "version", op: "=", value: versions.join(",") });
+    const regBegin = Number(initialMail.RegtBegin);
+    const regEnd = Number(initialMail.RegtEnd ?? initialMail.Regt);
+    if (regBegin > 0) rows.push({ id: id++, field: "regTime", op: ">=", value: secondsToDatetimeLocal(regBegin) });
+    if (regEnd > 0) rows.push({ id: id++, field: "regTime", op: "<=", value: secondsToDatetimeLocal(regEnd) });
+    return rows;
+  });
   const [error, setError] = React.useState("");
   const [submitting, setSubmitting] = React.useState(false);
   const isGlobalMail = mailType === "global";
@@ -2682,6 +2793,10 @@ function MailEditor({ canUploadItemTable, global, initialMail, items, onBack, on
     }
     if (!title.trim()) {
       setError("请输入邮件标题");
+      return;
+    }
+    if (!body.trim()) {
+      setError("邮件内容为空");
       return;
     }
     const endSeconds = parseDatetimeLocalSeconds(endTime);
@@ -2749,6 +2864,8 @@ function MailEditor({ canUploadItemTable, global, initialMail, items, onBack, on
       setError("区服未填写");
       return;
     }
+    const allServerIds = serverOptions.map((server) => Number(server.id)).filter((serverId) => Number.isFinite(serverId)).sort((a, b) => a - b);
+    const serverTargetsCoverAll = isGlobalMail && serverTargetIds.length > 0 && allServerIds.length > 0 && serverTargetIds.length === allServerIds.length && serverTargetIds.every((serverId, index) => serverId === allServerIds[index]);
     const startSeconds = sendMode === "scheduled" ? parseDatetimeLocalSeconds(startTime) : 0;
     if (sendMode === "scheduled" && !startSeconds) {
       setError("请选择有效的定时发送时间");
@@ -2762,8 +2879,8 @@ function MailEditor({ canUploadItemTable, global, initialMail, items, onBack, on
       setError("过期时间必须晚于生效时间");
       return;
     }
-    const mailTyp = isGlobalMail ? serverTargetIds.length ? 2 : 1 : 3;
-    const mailTargets = isGlobalMail ? serverTargetIds : targets;
+    const mailTyp = isGlobalMail ? serverTargetIds.length && !serverTargetsCoverAll ? 2 : 1 : 3;
+    const mailTargets = isGlobalMail ? serverTargetsCoverAll ? [] : serverTargetIds : targets;
     setError("");
     setSubmitting(true);
     try {
@@ -2838,10 +2955,7 @@ function MailEditor({ canUploadItemTable, global, initialMail, items, onBack, on
                     ) : row.field === "regTime" ? (
                       <input type="datetime-local" value={dateToDatetimeLocal(row.value, row.op === "<=")} onChange={(event) => setFilterRows((current) => current.map((item) => item.id === row.id ? { ...item, value: event.target.value } : item))} />
                     ) : row.field === "server" && serverOptions.length ? (
-                      <select value={row.value} onChange={(event) => setFilterRows((current) => current.map((item) => item.id === row.id ? { ...item, value: event.target.value } : item))}>
-                        <option value="">请选择游戏内区服</option>
-                        {serverOptions.map((server) => <option key={server.id} value={server.id}>{server.name}</option>)}
-                      </select>
+                      <ServerCascadeSelect options={serverOptions} value={row.value} onChange={(nextValue) => setFilterRows((current) => current.map((item) => item.id === row.id ? { ...item, value: nextValue } : item))} />
                     ) : (
                       <input disabled={unsupported} value={row.value} onChange={(event) => setFilterRows((current) => current.map((item) => item.id === row.id ? { ...item, value: event.target.value } : item))} placeholder={unsupported ? "当前接口暂未开放" : row.field === "version" ? "例如 1.8.0.0" : row.field === "server" ? "例如 12 或 1,2" : "例如 1,2"} />
                     )}
@@ -3725,10 +3839,7 @@ function NoticePage({ postWithToken }: { postWithToken: (endpoint: string, body:
                       ) : row.field === "regTime" ? (
                         <input type="datetime-local" value={dateToDatetimeLocal(row.value, row.op === "<=")} onChange={(event) => setForm({ ...form, conditions: noticeConditionRows.map((item) => item.id === row.id ? { ...item, value: event.target.value } : item) })} />
                       ) : row.field === "server" && serverOptions.length ? (
-                        <select value={row.value} onChange={(event) => setForm({ ...form, conditions: noticeConditionRows.map((item) => item.id === row.id ? { ...item, value: event.target.value } : item) })}>
-                          <option value="">请选择游戏内区服</option>
-                          {serverOptions.map((server) => <option key={server.id} value={server.id}>{server.name}</option>)}
-                        </select>
+                        <ServerCascadeSelect options={serverOptions} value={row.value} onChange={(nextValue) => setForm({ ...form, conditions: noticeConditionRows.map((item) => item.id === row.id ? { ...item, value: nextValue } : item) })} />
                       ) : (
                         <input value={row.value} onChange={(event) => setForm({ ...form, conditions: noticeConditionRows.map((item) => item.id === row.id ? { ...item, value: event.target.value } : item) })} placeholder={row.field === "version" ? "例如 1.8.0.0" : row.field === "server" ? "例如 12 或 1,2" : "例如 1,2"} />
                       )}
@@ -3977,6 +4088,71 @@ function MultiSelectDropdown({ onChange, options, placeholder, values }: { onCha
               {option.label}
             </label>
           ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function ServerCascadeSelect({ onChange, options, value }: { onChange: (value: string) => void; options: ServerOption[]; value: string }) {
+  const [open, setOpen] = React.useState(false);
+  const containerRef = React.useRef<HTMLDivElement | null>(null);
+  const groups = React.useMemo(() => {
+    const normalized = options
+      .map((server) => ({ id: Number(server.id), name: server.name || gameServerDisplayName(server.id) }))
+      .filter((server) => Number.isFinite(server.id) && server.id > 0)
+      .sort((a, b) => a.id - b.id);
+    const glServers = normalized.filter((server) => server.id <= 123);
+    const tkServers = normalized.filter((server) => server.id > 123);
+    const result: Array<{ key: string; label: string; servers: Array<{ id: number; name: string }> }> = [];
+    if (glServers.length) result.push({ key: "gl", label: "GL-1 - GL-123", servers: glServers });
+    const maxTkNumber = tkServers.reduce((max, server) => Math.max(max, server.id - 123), 0);
+    for (let start = 1; start <= maxTkNumber; start += 100) {
+      const end = Math.min(start + 99, maxTkNumber);
+      const servers = tkServers.filter((server) => {
+        const tkNumber = server.id - 123;
+        return tkNumber >= start && tkNumber <= end;
+      });
+      if (servers.length) result.push({ key: `tk-${start}`, label: `TK-${start} - TK-${end}`, servers });
+    }
+    return result;
+  }, [options]);
+  const [activeKey, setActiveKey] = React.useState(groups[0]?.key ?? "");
+  React.useEffect(() => {
+    if (!groups.some((group) => group.key === activeKey)) setActiveKey(groups[0]?.key ?? "");
+  }, [activeKey, groups]);
+  const activeGroup = groups.find((group) => group.key === activeKey) ?? groups[0];
+  const selectedName = value
+    ? value.includes(",") || value.includes("，") ? formatServerIdList(value) : options.find((server) => String(server.id) === String(value))?.name ?? gameServerDisplayName(value)
+    : "";
+  React.useEffect(() => {
+    if (!open) return undefined;
+    const closeOnOutsidePointerDown = (event: PointerEvent) => {
+      if (containerRef.current?.contains(event.target as Node)) return;
+      setOpen(false);
+    };
+    document.addEventListener("pointerdown", closeOnOutsidePointerDown);
+    return () => document.removeEventListener("pointerdown", closeOnOutsidePointerDown);
+  }, [open]);
+
+  return (
+    <div className="server-cascade-select" ref={containerRef}>
+      <button className="server-cascade-trigger" onClick={() => setOpen((current) => !current)} type="button">
+        <span>{selectedName || "请选择游戏内区服"}</span>
+        <ChevronDown size={15} />
+      </button>
+      {open && (
+        <div className="server-cascade-menu">
+          <div className="server-cascade-groups">
+            {groups.map((group) => (
+              <button className={group.key === activeGroup?.key ? "active" : ""} key={group.key} onMouseEnter={() => setActiveKey(group.key)} type="button">{group.label}</button>
+            ))}
+          </div>
+          <div className="server-cascade-options">
+            {activeGroup?.servers.map((server) => (
+              <button className={String(value) === String(server.id) ? "active" : ""} key={server.id} onClick={() => { onChange(String(server.id)); setOpen(false); }} type="button">{server.name}</button>
+            ))}
+          </div>
         </div>
       )}
     </div>

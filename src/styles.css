@@ -3176,7 +3176,7 @@ tbody tr:hover,
 
 .game-card-body {
   display: grid;
-  grid-template-columns: 72px 1fr auto;
+  grid-template-columns: 72px minmax(0, 1fr);
   align-items: start;
   gap: 14px;
   min-height: 108px;
@@ -3206,48 +3206,59 @@ tbody tr:hover,
 
 .game-meta {
   display: grid;
-  gap: 8px;
+  gap: 9px;
   min-width: 0;
 }
 
 .game-meta strong {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
   font-size: 18px;
+}
+
+.game-meta small {
+  justify-self: start;
+  border: 1px solid #cfe4ff;
+  border-radius: 999px;
+  padding: 3px 9px;
+  color: #2f8fea;
+  background: #f1f8ff;
+  font-size: 12px;
+  font-weight: 850;
+  white-space: nowrap;
 }
 
 .game-server-links {
   display: flex;
   flex-wrap: wrap;
   align-items: center;
-  gap: 8px 14px;
+  gap: 8px;
 }
 
 .game-server-links button {
-  border: 0;
-  padding: 0;
+  min-height: 34px;
+  border: 1px solid #bddcff;
+  border-radius: 6px;
+  padding: 0 14px;
   color: #2f8fea;
-  background: transparent;
-  font-size: 14px;
+  background: #f3f9ff;
+  font-size: 15px;
   font-weight: 800;
   cursor: pointer;
 }
 
 .game-server-links button:hover {
+  border-color: #2f8fea;
   color: #176fc1;
-  text-decoration: underline;
+  background: #e7f3ff;
 }
 
 .game-server-links button:disabled {
   color: #8fbbe6;
+  background: #f7fbff;
   cursor: wait;
-  text-decoration: none;
-}
-
-.game-card small {
-  align-self: center;
-  color: #2f8fea;
-  font-size: 13px;
-  font-weight: 750;
-  white-space: nowrap;
 }
 
 .empty-game-list {
@@ -3828,6 +3839,98 @@ tbody tr:hover,
 .multi-select-option input {
   width: 14px;
   height: 14px;
+}
+
+.server-cascade-select {
+  position: relative;
+  width: 100%;
+}
+
+.server-cascade-trigger {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  width: 100%;
+  height: 40px;
+  border: 1px solid #dde5ef;
+  border-radius: 4px;
+  padding: 0 10px 0 12px;
+  color: #526074;
+  background: #fff;
+  font-size: 13px;
+  text-align: left;
+}
+
+.server-cascade-trigger span {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.server-cascade-menu {
+  position: absolute;
+  z-index: 80;
+  top: calc(100% + 4px);
+  left: 0;
+  display: grid;
+  grid-template-columns: 180px 420px;
+  width: min(600px, calc(100vw - 48px));
+  max-height: 320px;
+  overflow: hidden;
+  border: 1px solid #cfe0f3;
+  border-radius: 6px;
+  background: #fff;
+  box-shadow: 0 18px 46px rgb(18 31 52 / 18%);
+}
+
+.server-cascade-groups,
+.server-cascade-options {
+  display: grid;
+  align-content: start;
+  max-height: 320px;
+  overflow: auto;
+  padding: 8px;
+}
+
+.server-cascade-groups {
+  border-right: 1px solid #e5edf6;
+  background: #f7fbff;
+}
+
+.server-cascade-groups button,
+.server-cascade-options button {
+  width: 100%;
+  min-height: 32px;
+  border: 0;
+  border-radius: 4px;
+  padding: 0 10px;
+  color: #526074;
+  background: transparent;
+  font-size: 13px;
+  text-align: left;
+  white-space: nowrap;
+}
+
+.server-cascade-groups button.active,
+.server-cascade-groups button:hover {
+  color: #176fc1;
+  background: #e7f3ff;
+}
+
+.server-cascade-options {
+  grid-template-columns: repeat(4, minmax(90px, 1fr));
+  gap: 6px;
+}
+
+.server-cascade-options button {
+  text-align: center;
+}
+
+.server-cascade-options button.active,
+.server-cascade-options button:hover {
+  color: #fff;
+  background: #2f8fea;
 }
 
 .managed-list {

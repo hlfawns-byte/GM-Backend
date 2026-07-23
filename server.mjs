@@ -440,7 +440,7 @@ async function handleLocalApi(req, res, pathname) {
   }
 
   if (pathname === "/local-api/game-servers" && req.method === "GET") {
-    const servers = Array.from({ length: 200 }, (_, index) => ({ id: index + 1, name: `游戏内区服 ${index + 1}` }));
+    const servers = Array.from({ length: 1000 }, (_, index) => ({ id: index + 1, name: `游戏内区服 ${index + 1}` }));
     sendJson(res, 200, { servers: servers.map((server) => ({ ...server, name: gameServerDisplayName(server.id) })) });
     return true;
   }

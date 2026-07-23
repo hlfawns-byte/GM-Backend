@@ -566,7 +566,7 @@ function localAccountPlugin() {
         }
 
         if (url === "/local-api/game-servers" && req.method === "GET") {
-          const servers = Array.from({ length: 200 }, (_, index) => ({ id: index + 1, name: gameServerDisplayName(index + 1) }));
+          const servers = Array.from({ length: 1000 }, (_, index) => ({ id: index + 1, name: gameServerDisplayName(index + 1) }));
           sendJson(res, 200, { servers });
           return;
         }
