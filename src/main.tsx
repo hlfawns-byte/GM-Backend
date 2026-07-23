@@ -507,14 +507,14 @@ function parseVersionParts(value: string) {
   const text = value.trim();
   if (!/^\d+(?:\.\d+){1,3}$/.test(text)) return null;
   const parts = text.split(".").map((part) => Number(part));
-  if (!parts.every((part) => Number.isInteger(part) && part >= 0 && part <= 99)) return null;
+  if (!parts.every((part, index) => Number.isInteger(part) && part >= 0 && part <= (index >= 2 ? 20 : 99))) return null;
   return parts;
 }
 
 function versionInputToParts(value: string, op: string) {
   const parts = parseVersionParts(value);
   if (!parts) return null;
-  if (parts.length === 2 && op === "<=") return [parts[0], parts[1], 99, 99];
+  if (parts.length === 2 && op === "<=") return [parts[0], parts[1], 0, 0];
   if (parts.length === 2) return [parts[0], parts[1], 0];
   return parts;
 }
@@ -532,18 +532,27 @@ function compareVersionParts(left: number[], right: number[]) {
   return 0;
 }
 
+function versionLowerBoundParts(target: number[]) {
+  const major = target[0] ?? 1;
+  const minor = Math.max(0, (target[1] ?? 0) - 2);
+  return [major, minor, 0, 0];
+}
+
 function enumerateVersionsUpTo(target: number[], includeTarget: boolean) {
+  const maxGeneratedPart = 20;
   const result: number[] = [];
   const targetMajor = target[0] ?? 1;
-  for (let major = 1; major <= targetMajor; major += 1) {
+  const lowerBound = versionLowerBoundParts(target);
+  for (let major = lowerBound[0]; major <= targetMajor; major += 1) {
+    const minMinor = major === lowerBound[0] ? lowerBound[1] : 0;
     const maxMinor = major === targetMajor ? target[1] ?? 0 : 99;
-    for (let minor = 0; minor <= maxMinor; minor += 1) {
-      const maxPatch = major === targetMajor && minor === maxMinor ? target[2] ?? 0 : 99;
+    for (let minor = minMinor; minor <= maxMinor; minor += 1) {
+      const maxPatch = major === targetMajor && minor === maxMinor ? target[2] ?? 0 : maxGeneratedPart;
       for (let patch = 0; patch <= maxPatch; patch += 1) {
         const base = [major, minor, patch];
         const baseCompare = compareVersionParts(base, target);
         if (baseCompare < 0 || (includeTarget && baseCompare === 0)) result.push(versionPartsToCode(base));
-        const maxHotfix = major === targetMajor && minor === maxMinor && patch === maxPatch ? target[3] ?? 0 : 99;
+        const maxHotfix = major === targetMajor && minor === maxMinor && patch === maxPatch ? target[3] ?? 0 : maxGeneratedPart;
         for (let hotfix = 1; hotfix <= maxHotfix; hotfix += 1) {
           const hotfixParts = [major, minor, patch, hotfix];
           const hotfixCompare = compareVersionParts(hotfixParts, target);
@@ -576,7 +585,7 @@ function toVersionConditionArray(rows: Array<{ field: string; op: string; value:
     const rowSet = new Set<number>(rowCodes);
     selected = selected ? selected.filter((code) => rowSet.has(code)) : rowCodes;
   }
-  return Array.from(new Set(selected ?? [])).sort((a, b) => a - b);
+  return Array.from(new Set(selected ?? [])).sort(compareVersionCodes);
 }
 
 function versionCodeToText(value: unknown) {
@@ -593,9 +602,20 @@ function versionCodeToText(value: unknown) {
   return parts.join(".");
 }
 
+function versionCodeToParts(value: unknown) {
+  return versionCodeToText(value)
+    .split(".")
+    .map((part) => Number(part))
+    .filter((part) => Number.isFinite(part));
+}
+
+function compareVersionCodes(left: unknown, right: unknown) {
+  return compareVersionParts(versionCodeToParts(left), versionCodeToParts(right));
+}
+
 function formatVersionConditionList(values: unknown[]) {
   if (values.length > 30) {
-    const numbers = values.map((value) => Number(value)).filter((value) => Number.isFinite(value)).sort((a, b) => a - b);
+    const numbers = values.map((value) => Number(value)).filter((value) => Number.isFinite(value)).sort(compareVersionCodes);
     if (numbers.length) return [`${versionCodeToText(numbers[0])} - ${versionCodeToText(numbers[numbers.length - 1])}`];
   }
   const formatted: string[] = [];
