@@ -81,6 +81,7 @@ const itemUploadFile = path.resolve(`data/${portal}/uploads/Item.xlsx`);
 const mailTemplatesFile = path.resolve(`data/${portal}/mail-templates.json`);
 const rewardTemplatesFile = path.resolve(`data/${portal}/reward-templates.json`);
 const scheduledMailsFile = path.resolve(`data/${portal}/scheduled-mails.json`);
+const mailGroupsFile = path.resolve(`data/${portal}/mail-groups.json`);
 const userLogsFile = path.resolve(`data/${portal}/user-logs.json`);
 const noticesFile = path.resolve(`data/${portal}/notices.json`);
 
@@ -651,6 +652,37 @@ function localAccountPlugin() {
             .filter((task) => task.status !== "sent")
             .map(publicScheduledMail);
           sendJson(res, 200, { mails });
+          return;
+        }
+
+        if (pathname === "/local-api/mail-groups" && req.method === "GET") {
+          const serverUrl = String(new URL(req.url ?? "", "http://localhost").searchParams.get("serverUrl") ?? "").trim();
+          const groups = readJsonFile<Record<string, unknown>[]>(mailGroupsFile, []);
+          sendJson(res, 200, { groups: groups.filter((group) => !serverUrl || String(group.serverUrl ?? "") === serverUrl) });
+          return;
+        }
+
+        if (pathname === "/local-api/mail-groups" && req.method === "POST") {
+          const body = await readJsonBody(req);
+          const group = body.group && typeof body.group === "object" ? body.group as Record<string, unknown> : null;
+          const id = String(group?.Id ?? group?.id ?? "").trim();
+          if (!group || !id) {
+            sendJson(res, 400, { error: "邮件汇总记录参数不完整" });
+            return;
+          }
+          const groups = readJsonFile<Record<string, unknown>[]>(mailGroupsFile, []);
+          const next = { ...group, serverUrl: String(body.serverUrl ?? group.serverUrl ?? "") };
+          writeJsonFile(mailGroupsFile, [next, ...groups.filter((item) => String(item.Id ?? item.id ?? "") !== id)].slice(0, 100));
+          sendJson(res, 200, { group: next });
+          return;
+        }
+
+        const mailGroupMatch = pathname.match(/^\/local-api\/mail-groups\/([^/]+)$/);
+        if (mailGroupMatch && req.method === "DELETE") {
+          const id = decodeURIComponent(mailGroupMatch[1]);
+          const groups = readJsonFile<Record<string, unknown>[]>(mailGroupsFile, []);
+          writeJsonFile(mailGroupsFile, groups.filter((item) => String(item.Id ?? item.id ?? "") !== id));
+          sendJson(res, 200, { Result: 0, id });
           return;
         }
 

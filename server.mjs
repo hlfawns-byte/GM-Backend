@@ -28,6 +28,7 @@ const files = {
   noticeTemplates: path.join(dataDir, "notice-templates.json"),
   rewardTemplates: path.join(dataDir, "reward-templates.json"),
   scheduledMails: path.join(dataDir, "scheduled-mails.json"),
+  mailGroups: path.join(dataDir, "mail-groups.json"),
   userLogs: path.join(dataDir, "user-logs.json"),
   notices: path.join(dataDir, "notices.json"),
 };
@@ -550,6 +551,37 @@ async function handleLocalApi(req, res, pathname) {
       .filter((task) => task.status !== "sent")
       .map(publicScheduledMail);
     sendJson(res, 200, { mails });
+    return true;
+  }
+
+  if (pathname === "/local-api/mail-groups" && req.method === "GET") {
+    const serverUrl = String(new URL(req.url, "http://localhost").searchParams.get("serverUrl") ?? "").trim();
+    const groups = readJson(files.mailGroups, []);
+    sendJson(res, 200, { groups: (Array.isArray(groups) ? groups : []).filter((group) => !serverUrl || String(group.serverUrl ?? "") === serverUrl) });
+    return true;
+  }
+
+  if (pathname === "/local-api/mail-groups" && req.method === "POST") {
+    const body = await readJsonBody(req);
+    const group = body.group && typeof body.group === "object" ? body.group : null;
+    const id = String(group?.Id ?? group?.id ?? "").trim();
+    if (!group || !id) {
+      sendJson(res, 400, { error: "邮件汇总记录参数不完整" });
+      return true;
+    }
+    const groups = readJson(files.mailGroups, []);
+    const next = { ...group, serverUrl: String(body.serverUrl ?? group.serverUrl ?? "") };
+    writeJson(files.mailGroups, [next, ...(Array.isArray(groups) ? groups : []).filter((item) => String(item.Id ?? item.id ?? "") !== id)].slice(0, 100));
+    sendJson(res, 200, { group: next });
+    return true;
+  }
+
+  const mailGroupMatch = pathname.match(/^\/local-api\/mail-groups\/([^/]+)$/);
+  if (mailGroupMatch && req.method === "DELETE") {
+    const id = decodeURIComponent(mailGroupMatch[1]);
+    const groups = readJson(files.mailGroups, []);
+    writeJson(files.mailGroups, (Array.isArray(groups) ? groups : []).filter((item) => String(item.Id ?? item.id ?? "") !== id));
+    sendJson(res, 200, { Result: 0, id });
     return true;
   }
 
