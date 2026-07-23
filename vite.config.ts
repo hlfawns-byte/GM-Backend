@@ -667,6 +667,11 @@ function localAccountPlugin() {
             sendJson(res, 400, { error: "定时发送时间必须晚于当前时间" });
             return;
           }
+          const expireAt = Number(mailBody.Et);
+          if (Number.isFinite(expireAt) && expireAt <= scheduleAt + 10 * 60) {
+            sendJson(res, 400, { error: "过期时间必须比定时发送时间晚超过 10 分钟，建议至少晚 11 分钟" });
+            return;
+          }
           const task: ScheduledMailRecord = {
             id: `scheduled-${Date.now()}`,
             serverUrl,
