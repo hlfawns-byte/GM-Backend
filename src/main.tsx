@@ -14,6 +14,8 @@ import {
   MessageSquare,
   MonitorDot,
   Plus,
+  Pencil,
+  RefreshCw,
   Search,
   Send,
   Server,
@@ -24,6 +26,7 @@ import {
   Trophy,
   UserCog,
   Users,
+  X,
 } from "lucide-react";
 import "./styles.css";
 
@@ -140,6 +143,13 @@ type ApiPostResponse = {
   payload: unknown;
 };
 
+type SprintActivity = {
+  SvrId: number;
+  Typ: number;
+  TimeBegin: number;
+  TimeEnd: number;
+};
+
 type MailSectionKey = Extract<SectionKey, "mailPersonal" | "mailGlobal" | "mailTemplate" | "mailRewardTemplate">;
 type GiftSectionKey = Extract<SectionKey, "giftCode" | "giftClaim" | "giftRecall">;
 
@@ -222,6 +232,8 @@ type MailRewardItem = {
 const MAX_REWARD_COUNT = 2_000_000_000;
 const MAX_REWARD_GROUPS = 100;
 const MAX_TEMPLATE_NAME_LENGTH = 30;
+const MAX_NOTICE_TEMPLATE_NAME_LENGTH = 20;
+const MAX_NOTICE_TITLE_LENGTH = 20;
 
 function validateRewardRows(rewards: MailRewardItem[], items: ItemOption[]) {
   const normalized = rewards.map((reward) => ({ itemId: reward.itemId.trim(), count: reward.count.trim() }));
@@ -258,8 +270,8 @@ const MAIL_DEFAULT_REG_BEGIN = "2020-01-01T00:00";
 const MAIL_DEFAULT_EXPIRE = "2050-12-31T23:59";
 const NOTICE_DEFAULT_REG_BEGIN = "2020-01-01T00:00";
 const NOTICE_DEFAULT_REG_END = "2050-12-31T23:59";
-const NOTICE_DEFAULT_VERSION_RANGE = "0,4294967295";
 const NOTICE_DEFAULT_IMAGE = "notice_bg_1";
+const NOTICE_DISABLED_SERVER_ID = 2147483647;
 
 function defaultRegEndTime() {
   return toDatetimeLocal(new Date());
@@ -655,8 +667,18 @@ function toNoticeVersionArray(value?: string) {
   return text.includes(".") ? toVersionNumberArray(text) : toFlexibleNumberArray(text);
 }
 
-function defaultMailRegEndDisplay() {
-  return formatBeijingTime(defaultRegEndTime());
+function mailIdTimestampSeconds(value: unknown) {
+  const digits = String(value ?? "").replace(/\D/g, "");
+  if (digits.length < 16) return 0;
+  try {
+    const milliseconds = Number(BigInt(digits) / 1_000_000n);
+    const seconds = Math.floor(milliseconds / 1000);
+    const earliest = Date.UTC(2020, 0, 1) / 1000;
+    const latest = Date.UTC(2100, 0, 1) / 1000;
+    return seconds >= earliest && seconds < latest ? seconds : 0;
+  } catch {
+    return 0;
+  }
 }
 
 function toPlatformNumberArray(value?: string) {
@@ -843,6 +865,38 @@ function parseJson(value: string) {
 
 function getObject(value: unknown): Record<string, unknown> | null {
   return value && typeof value === "object" && !Array.isArray(value) ? (value as Record<string, unknown>) : null;
+}
+
+function parseObject(value: unknown): Record<string, unknown> | null {
+  const object = getObject(value);
+  if (object) return object;
+  if (typeof value !== "string" || !value.trim()) return null;
+  try {
+    return getObject(JSON.parse(value));
+  } catch {
+    return null;
+  }
+}
+
+function parseArray(value: unknown): unknown[] {
+  if (Array.isArray(value)) return value;
+  if (typeof value !== "string" || !value.trim()) return [];
+  try {
+    const parsed = JSON.parse(value);
+    return Array.isArray(parsed) ? parsed : [];
+  } catch {
+    return [];
+  }
+}
+
+function objectValue(object: Record<string, unknown> | null, ...keys: string[]) {
+  if (!object) return undefined;
+  for (const key of keys) {
+    if (object[key] !== undefined) return object[key];
+    const actualKey = Object.keys(object).find((candidate) => candidate.toLowerCase() === key.toLowerCase());
+    if (actualKey !== undefined) return object[actualKey];
+  }
+  return undefined;
 }
 
 function getArray(value: unknown): unknown[] {
@@ -1355,7 +1409,7 @@ function App() {
             </section>
           )}
 
-          {active === "dashboard" ? <Dashboard results={results} accounts={accounts} /> : active === "playerInfo" ? <PlayerInfoPage postWithToken={postWithToken} /> : active === "bindUid" ? <BindUidPage postWithToken={postWithToken} /> : active === "gmState" ? <BanControlPage postWithToken={postWithToken} /> : active === "silence" ? <SilencePage operator={session.operatorAccount} /> : active.startsWith("mail") ? <MailSuitePage active={active as MailSectionKey} canUploadItemTable={auth.isAdmin} postWithToken={postWithToken} session={session} setActive={setActive} /> : active.startsWith("gift") ? <GiftSuitePage active={active as GiftSectionKey} canUploadItemTable={auth.isAdmin} postWithToken={postWithToken} /> : active === "notice" ? <NoticePage postWithToken={postWithToken} /> : active === "noticeTemplate" ? <NoticeTemplatePage /> : active === "serverTime" ? <OpenServerPage postWithToken={postWithToken} /> : active === "orderRefund" ? <OrderRefundPage postWithToken={postWithToken} /> : moduleConfig.status === "pending" ? <UnavailablePanel module={moduleConfig} /> : (
+          {active === "dashboard" ? <Dashboard results={results} accounts={accounts} /> : active === "playerInfo" ? <PlayerInfoPage postWithToken={postWithToken} /> : active === "bindUid" ? <BindUidPage postWithToken={postWithToken} /> : active === "gmState" ? <BanControlPage postWithToken={postWithToken} /> : active === "silence" ? <SilencePage operator={session.operatorAccount} /> : active.startsWith("mail") ? <MailSuitePage active={active as MailSectionKey} canUploadItemTable={auth.isAdmin} postWithToken={postWithToken} session={session} setActive={setActive} /> : active.startsWith("gift") ? <GiftSuitePage active={active as GiftSectionKey} canUploadItemTable={auth.isAdmin} postWithToken={postWithToken} /> : active === "notice" ? <NoticePage postWithToken={postWithToken} /> : active === "noticeTemplate" ? <NoticeTemplatePage /> : active === "sprint" ? <SprintActivityPage postWithToken={postWithToken} /> : active === "serverTime" ? <OpenServerPage postWithToken={postWithToken} /> : active === "orderRefund" ? <OrderRefundPage postWithToken={postWithToken} /> : moduleConfig.status === "pending" ? <UnavailablePanel module={moduleConfig} /> : (
             <>
               <section className="filter-panel">
                 <div className="panel-heading">
@@ -1835,9 +1889,13 @@ function PlayerInfoPage({ postWithToken }: { postWithToken: (endpoint: string, b
     try {
       const result = await postWithToken("/gmQueryPlayerInfo", { UserId: ids[0] });
       const parsed = result.payload as Record<string, unknown>;
-      setPayload(parsed);
       const businessError = apiBusinessError(result);
-      if (businessError) setError(businessError === "用户ID未填写，或用户不存在" ? "用户id不存在" : businessError);
+      if (businessError) {
+        setPayload(null);
+        setError(businessError === "用户ID未填写，或用户不存在" ? "用户id不存在" : businessError);
+      } else {
+        setPayload(parsed);
+      }
     } catch (error) {
       setError(error instanceof Error ? error.message : "查询失败");
       setPayload(null);
@@ -1846,30 +1904,20 @@ function PlayerInfoPage({ postWithToken }: { postWithToken: (endpoint: string, b
     }
   };
 
-  const data = getObject(payload?.data) ?? getObject(payload);
-  const info = getObject(data?.Info);
-  const extra = getObject(data?.Extra)
-    ?? getObject(data?.extra)
-    ?? getObject(data?.Info2)
-    ?? getObject(data?.info2)
-    ?? getObject(data?.GmExtra)
-    ?? getObject(data?.gmExtra)
-    ?? getObject(data?.PlayerInfoExtra)
-    ?? getObject(data?.playerInfoExtra)
-    ?? getObject(info?.Extra)
-    ?? getObject(info?.extra)
-    ?? getObject(info?.Info2)
-    ?? getObject(info?.info2);
+  const data = parseObject(payload?.data) ?? parseObject(payload);
+  const info = parseObject(objectValue(data, "Info", "PlayerInfo"));
+  const extra = parseObject(objectValue(data, "Extra", "Info2", "GmExtra", "PlayerInfoExtra"))
+    ?? parseObject(objectValue(info, "Extra", "Info2"));
   const extraValue = (...keys: string[]) => {
     for (const key of keys) {
-      const value = extra?.[key] ?? data?.[key] ?? info?.[key];
+      const value = objectValue(extra, key) ?? objectValue(data, key) ?? objectValue(info, key);
       if (value !== undefined && value !== null && value !== "") return value;
     }
     return undefined;
   };
   const dataValue = (...keys: string[]) => {
     for (const key of keys) {
-      const value = data?.[key] ?? info?.[key] ?? extra?.[key];
+      const value = objectValue(data, key) ?? objectValue(info, key) ?? objectValue(extra, key);
       if (value !== undefined && value !== null && value !== "") return value;
     }
     return undefined;
@@ -1881,55 +1929,138 @@ function PlayerInfoPage({ postWithToken }: { postWithToken: (endpoint: string, b
   const clientVersionValue = extraValue("clientVersion", "ClientVersion", "client_version");
   const onlineValue = extraValue("online", "Online");
   const firstUserId = dataValue("UserId", "UID", "uid", "Uid") ?? filters.userId;
-  const desc = typeof data?.Desc === "string" ? data.Desc : "";
-  const mapAttribValue = getObject(info?.mapAttribValue);
-  const mapAttribBase = getObject(info?.mapAttribBase);
-  const mapAttribRatio = getObject(info?.mapAttribRatio);
-  const mapUnitLvl = getObject(info?.mapUnitLvl);
-  const formations = getArray(info?.lstFormation).map((formation, index) => {
-    const formationObject = getObject(formation);
+  const descValue = objectValue(data, "Desc");
+  const desc = typeof descValue === "string" ? descValue : "";
+  const infoValue = (...keys: string[]) => objectValue(info, ...keys);
+  const infoObject = (...keys: string[]) => parseObject(infoValue(...keys));
+  const infoArray = (...keys: string[]) => parseArray(infoValue(...keys));
+  const mapAttribValue = infoObject("mapAttribValue");
+  const mapAttribBase = infoObject("mapAttribBase");
+  const mapAttribRatio = infoObject("mapAttribRatio");
+  const mapUnitLvl = infoObject("mapUnitLvl");
+  const mapUnitAwake = infoObject("mapUnitAwake");
+  const mapUnitSkins = infoObject("mapUnitPutSkins");
+  const mapUnitSkinLvl = infoObject("mapUnitSkinLvl");
+  const mapUnitSkills = infoObject("mapUnitUnlockSkillGrade");
+  const formations = infoArray("lstFormation").map((formation, index) => {
+    const formationObject = parseObject(formation);
     return {
-      index: `阵容${index + 1}`,
-      troopIds: getArray(formationObject?.troopIds).join(", "),
+      index: index + 1,
+      name: objectValue(formationObject, "name") || `阵容${index + 1}`,
+      troopIds: parseArray(objectValue(formationObject, "troopIds")).join(", "),
     };
   });
-  const gears = Object.entries(getObject(info?.mapGear) ?? {}).map(([site, item]) => {
-    const itemObject = getObject(item);
+  const gears = Object.entries(infoObject("mapGear") ?? {}).map(([site, item]) => {
+    const itemObject = parseObject(item);
     return {
-      id: itemObject?.id ?? site,
-      name: itemObject?.id ?? site,
-      level: formatCell(itemObject?.lvl),
-      using: "是",
+      site,
+      uid: objectValue(itemObject, "itemUid"),
+      id: objectValue(itemObject, "id"),
+      level: objectValue(itemObject, "lvl"),
+      advanced: objectValue(itemObject, "numAdvanced"),
+      craftId: objectValue(itemObject, "idCraft"),
     };
   });
   const heroes = Object.entries(mapUnitLvl ?? {}).map(([id, level]) => ({
     id,
-    name: id,
-    star: formatCell(level),
-    using: Number(info?.heroId) === Number(id) || Number(info?.idHeroUsing) === Number(id) ? "是" : "否",
+    level,
+    awakeLevel: objectValue(parseObject(mapUnitAwake?.[id]), "lvl"),
+    awakeEffect: objectValue(parseObject(mapUnitAwake?.[id]), "fx"),
+    skinId: mapUnitSkins?.[id],
+    skinLevel: mapUnitSkinLvl?.[id],
+    skillLevel: mapUnitSkills?.[id],
+    using: Number(infoValue("heroId")) === Number(id) ? "是" : "否",
   }));
-  const runeRows = getArray(info?.inlayInfo).map((item, index) => ({
-    id: `镶嵌${index + 1}`,
-    name: JSON.stringify(getObject(item)?.dict ?? {}),
-    using: "是",
+  const clothesSites = infoArray("putClotheSites");
+  const clothesRows = Object.entries(infoObject("mapClothes") ?? {}).map(([key, value]) => {
+    const item = parseObject(value);
+    const position = Number(objectValue(item, "position"));
+    const site = parseObject(clothesSites[position - 1]);
+    return {
+      id: objectValue(item, "id") ?? key,
+      itemId: objectValue(item, "itemId"),
+      position: ["", "武器", "盾牌", "头盔", "铠甲", "戒指", "项链"][position] ?? position,
+      siteLevel: objectValue(site, "level"),
+      quality: objectValue(item, "quality"),
+      level: objectValue(item, "level"),
+      rerollTime: objectValue(item, "rerollTime"),
+      madeTime: formatTimestamp(objectValue(item, "madeTime")),
+    };
+  });
+  const petFightMap = infoObject("mapPetOutToFight");
+  const pets = infoArray("lstPet").map((value) => {
+    const item = parseObject(value);
+    const id = objectValue(item, "id");
+    const positions = Object.entries(petFightMap ?? {}).filter(([, petId]) => Number(petId) === Number(id)).map(([position]) => position).join(", ");
+    return { id, level: objectValue(item, "lvl"), position: positions || "未出战" };
+  });
+  const battlePets = Object.entries(infoObject("pet") ?? {}).map(([position, value]) => {
+    const item = parseObject(value);
+    return { position, uid: objectValue(item, "uid"), itemId: objectValue(item, "Id", "id"), count: objectValue(item, "count") };
+  });
+  const artifacts = infoArray("lstArtifact").map((value) => {
+    const item = parseObject(value);
+    const id = objectValue(item, "id");
+    const usingIds = [infoValue("idArtifactUsing"), infoValue("idArtifactUsing2"), infoValue("idArtifactUsing3")].map(Number);
+    return { id, level: objectValue(item, "lvl"), exp: objectValue(item, "exp"), using: usingIds.includes(Number(id)) ? "是" : "否" };
+  });
+  const mounts = infoArray("lstMount").map((value) => {
+    const item = parseObject(value);
+    const id = objectValue(item, "id");
+    const usingIds = [infoValue("idMountUsing"), infoValue("idMountUsing2"), infoValue("idMountUsing3")].map(Number);
+    return { id, level: objectValue(item, "lvl"), exp: objectValue(item, "exp"), using: usingIds.includes(Number(id)) ? "是" : "否" };
+  });
+  const treasures = infoArray("treasureLst").map((value) => {
+    const item = parseObject(value);
+    return { id: objectValue(item, "id"), level: objectValue(item, "lvl"), adNum: objectValue(item, "adNum") };
+  });
+  const runeLevels = infoArray("lstPutOnRuneLevel");
+  const runes = Object.entries(infoObject("mapPutOnRune") ?? {}).map(([position, value]) => {
+    const item = parseObject(value);
+    return {
+      position,
+      keyId: objectValue(item, "keyId"),
+      runeId: objectValue(item, "runeId"),
+      level: runeLevels[Number(position)],
+      artificeTimes: objectValue(item, "artificeTimes"),
+      skillId: objectValue(item, "runeSkills"),
+    };
+  });
+  const gemBag = parseObject(infoValue("gemBag"));
+  const gemRows = Object.entries(parseObject(objectValue(gemBag, "dict")) ?? {}).map(([uid, value]) => {
+    const item = parseObject(value);
+    return { uid: objectValue(item, "gemUid") ?? uid, itemId: objectValue(item, "itemId"), equipSlot: objectValue(item, "equipSlot"), slot: objectValue(item, "slot") };
+  });
+  const inlayRows = infoArray("inlayInfo").flatMap((value, page) => {
+    const item = parseObject(value);
+    return Object.entries(parseObject(objectValue(item, "dict")) ?? {}).map(([slot, gemList]) => ({
+      page: objectValue(item, "name") || `第${page + 1}页`,
+      slot,
+      gemIds: parseArray(objectValue(parseObject(gemList), "list")).filter((id) => Number(id) !== 0).join(", ") || "未镶嵌",
+    }));
+  });
+  const attributeRows = Array.from(new Set([...Object.keys(mapAttribValue ?? {}), ...Object.keys(mapAttribBase ?? {}), ...Object.keys(mapAttribRatio ?? {})])).map((id) => ({
+    id,
+    value: mapAttribValue?.[id],
+    base: mapAttribBase?.[id],
+    ratio: mapAttribRatio?.[id],
   }));
-  const orderRows = [
-    { label: "宠物", value: JSON.stringify(info?.pet ?? {}) },
-    { label: "宝石背包", value: JSON.stringify(info?.gemBag ?? {}) },
-    { label: "基础属性", value: JSON.stringify(mapAttribBase ?? {}) },
-    { label: "属性倍率", value: JSON.stringify(mapAttribRatio ?? {}) },
-  ].filter((row) => row.value && row.value !== "{}");
   const summaryRows = data
     ? [{
       userPid: firstUserId,
       deviceId: dataValue("DeviceId", "deviceId"),
-      platformUid: dataValue("AccId", "AccountId", "platformUid", "PlatformUid"),
+      nickname: infoValue("nickname"),
+      serverId: infoValue("svrId"),
       registerTime: formatTimestampValue(extraValue("reg", "Reg", "RegTime", "regTime")),
       lastLoginTime: formatTimestampValue(extraValue("out", "Out", "LastLoginTime", "lastLoginTime")),
     }]
     : [];
   const infoCells: Array<[string, unknown]> = [
+    ["查询结果", Number(dataValue("Result")) === 0 ? "成功" : dataValue("Result")],
     ["用户PID", firstUserId],
+    ["昵称", infoValue("nickname")],
+    ["性别", Number(infoValue("sex")) === 1 ? "男" : Number(infoValue("sex")) === 2 ? "女" : infoValue("sex")],
+    ["游戏区服ID", infoValue("svrId")],
     ["deviceId", dataValue("DeviceId", "deviceId")],
     ["platformUid", dataValue("AccId", "AccountId", "platformUid", "PlatformUid")],
     ["金币", extraValue("goldNum", "GoldNum") ?? mapAttribValue?.["4"] ?? data?.Gold],
@@ -1937,7 +2068,7 @@ function PlayerInfoPage({ postWithToken }: { postWithToken: (endpoint: string, b
     ["点券", extraValue("couponNum", "CouponNum")],
     ["退款翡翠欠款", extraValue("refundJadeDebt", "RefundJadeDebt")],
     ["退款点券欠款", extraValue("refundItem999Debt", "RefundItem999Debt")],
-    ["等级", info?.lvl ?? info?.grade ?? data?.Level],
+    ["等级", infoValue("lvl", "grade") ?? data?.Level],
     ["注册时间", formatTimestampValue(extraValue("reg", "Reg", "RegTime", "regTime"))],
     ["最后登出时间", formatTimestampValue(extraValue("out", "Out", "LastLoginTime", "lastLoginTime"))],
     ["国家", dataValue("Country", "country")],
@@ -1947,17 +2078,22 @@ function PlayerInfoPage({ postWithToken }: { postWithToken: (endpoint: string, b
     ["总充值金额", extraValue("cntCharge", "CntCharge") ?? data?.PayTotal],
     ["总消耗钻石数量", dataValue("CostDiamond", "costDiamond")],
     ["总消耗金币数量", dataValue("CostGold", "costGold")],
-    ["关卡ID", info?.maxChapter ?? data?.StageId],
+    ["最大章节", infoValue("maxChapter")],
+    ["PVE关卡进度", infoValue("pveStage")],
     ["系统标识", platformName ?? data?.System],
     ["玩家语言", languageName],
     ["客户端通信版本号", clientVersionValue !== undefined ? versionCodeToText(clientVersionValue) : data?.ClientVersion],
-    ["头像ID", info?.head],
-    ["头像框ID", info?.headFrameId],
-    ["称号ID", info?.titleId],
-    ["战力", info?.combatPower],
-    ["当前地图ID", info?.mapid],
-    ["当前英雄ID", info?.heroId ?? info?.idHeroUsing],
-    ["竞技场排名", Number(info?.arenaRank) === 4294967295 ? "未上榜" : info?.arenaRank],
+    ["头像ID", infoValue("head")],
+    ["头像URL", infoValue("headUrl")],
+    ["头像框ID", infoValue("headFrameId")],
+    ["称号ID", infoValue("titleId")],
+    ["战力", infoValue("combatPower")],
+    ["当前地图ID", infoValue("mapid")],
+    ["当前兵种ID", infoValue("heroId")],
+    ["当前主角ID", infoValue("idHeroUsing")],
+    ["公会ID", infoValue("gid")],
+    ["公会名称", infoValue("guildName")],
+    ["竞技场排名", Number(infoValue("arenaRank")) === 4294967295 ? "未上榜" : infoValue("arenaRank")],
   ];
   const tabs = ["用户信息", "用户订单", "预下单", "用户行为", "封号日志", "禁赛日志", "月卡"];
 
@@ -1974,18 +2110,28 @@ function PlayerInfoPage({ postWithToken }: { postWithToken: (endpoint: string, b
         {error && <div className="player-inline-error">{error}</div>}
       </div>
 
-      <PlayerSimpleTable columns={["用户PID", "deviceId", "platformUid", "注册时间", "最后登录时间"]} emptyText={desc || "暂无数据"} rows={summaryRows} />
+      <PlayerSimpleTable columns={["用户PID", "昵称", "游戏区服ID", "注册时间", "最后登录时间"]} keys={["userPid", "nickname", "serverId", "registerTime", "lastLoginTime"]} emptyText={desc || "暂无数据"} rows={summaryRows} />
 
       <section className="player-detail-panel">
         <div className="player-tabs">
           {tabs.map((tab) => <button className={activeTab === tab ? "active" : ""} key={tab} onClick={() => setActiveTab(tab)} type="button">{tab}</button>)}
         </div>
-        {activeTab === "用户信息" ? <PlayerInfoGrid cells={infoCells} /> : activeTab === "用户行为" && formations.length ? <PlayerSimpleTable columns={["阵容", "上阵单位"]} keys={["index", "troopIds"]} emptyText="暂无数据" rows={formations} /> : activeTab === "用户订单" && orderRows.length ? <PlayerSimpleTable columns={["项目", "内容"]} keys={["label", "value"]} emptyText="暂无数据" rows={orderRows} /> : <div className="player-empty-block">当前服务器接口暂未开放“{activeTab}”数据</div>}
+        {activeTab === "用户信息" ? <PlayerInfoGrid cells={infoCells} /> : activeTab === "用户行为" && formations.length ? <PlayerSimpleTable columns={["序号", "阵容名称", "上阵单位ID"]} keys={["index", "name", "troopIds"]} emptyText="暂无数据" rows={formations} /> : <div className="player-empty-block">当前服务器接口暂未开放“{activeTab}”数据</div>}
       </section>
 
-      <PlayerSectionTable title="游戏角色" columns={["角色ID", "角色名称", "星级", "正在使用"]} keys={["id", "name", "star", "using"]} rows={heroes} />
-      <PlayerSectionTable title="角色装备" columns={["装备ID", "装备名称", "等级", "正在使用"]} keys={["id", "name", "level", "using"]} rows={gears} />
-      <PlayerSectionTable title="角色符文" columns={["符文ID", "符文名称", "正在使用"]} keys={["id", "name", "using"]} rows={runeRows} />
+      <PlayerSectionTable title="兵种与角色" columns={["兵种ID", "等级", "觉醒等级", "觉醒特效", "皮肤ID", "皮肤等级", "技能等级", "正在使用"]} keys={["id", "level", "awakeLevel", "awakeEffect", "skinId", "skinLevel", "skillLevel", "using"]} rows={heroes} />
+      <PlayerSectionTable title="阵容" columns={["序号", "阵容名称", "上阵单位ID"]} keys={["index", "name", "troopIds"]} rows={formations} />
+      <PlayerSectionTable title="局外装备" columns={["装备类型", "唯一ID", "装备ID", "等级", "进阶次数", "合成ID"]} keys={["site", "uid", "id", "level", "advanced", "craftId"]} rows={gears} />
+      <PlayerSectionTable title="新装备系统" columns={["唯一ID", "道具ID", "部位", "栏位等级", "品质", "等级", "洗练次数", "制作时间"]} keys={["id", "itemId", "position", "siteLevel", "quality", "level", "rerollTime", "madeTime"]} rows={clothesRows} />
+      <PlayerSectionTable title="宠物" columns={["宠物ID", "等级", "出战位置"]} keys={["id", "level", "position"]} rows={pets} />
+      <PlayerSectionTable title="出战宠物信息" columns={["位置", "唯一ID", "道具ID", "数量"]} keys={["position", "uid", "itemId", "count"]} rows={battlePets} />
+      <PlayerSectionTable title="神器" columns={["神器ID", "星级", "经验", "正在使用"]} keys={["id", "level", "exp", "using"]} rows={artifacts} />
+      <PlayerSectionTable title="坐骑" columns={["坐骑ID", "星级", "经验", "正在使用"]} keys={["id", "level", "exp", "using"]} rows={mounts} />
+      <PlayerSectionTable title="宝物" columns={["宝物ID", "等级", "广告次数"]} keys={["id", "level", "adNum"]} rows={treasures} />
+      <PlayerSectionTable title="符文" columns={["位置", "唯一ID", "符文ID", "等级", "洗炼次数", "技能ID"]} keys={["position", "keyId", "runeId", "level", "artificeTimes", "skillId"]} rows={runes} />
+      <PlayerSectionTable title="玩家属性" columns={["属性ID", "最终值", "基础值", "百分比加成"]} keys={["id", "value", "base", "ratio"]} rows={attributeRows} />
+      <PlayerSectionTable title="宝石背包" columns={["宝石唯一ID", "道具ID", "装备栏位", "槽位"]} keys={["uid", "itemId", "equipSlot", "slot"]} rows={gemRows} />
+      <PlayerSectionTable title="宝石镶嵌" columns={["宝石页", "装备栏位", "宝石唯一ID"]} keys={["page", "slot", "gemIds"]} rows={inlayRows} />
     </section>
   );
 }
@@ -2007,7 +2153,7 @@ function PlayerInfoGrid({ cells }: { cells: Array<[string, unknown]> }) {
 }
 
 function PlayerSectionTable({ columns, keys, rows, title }: { columns: string[]; keys: string[]; rows: Array<Record<string, unknown>>; title: string }) {
-  return <section className="player-section-table"><div>{title}</div><PlayerSimpleTable columns={columns} emptyText="暂无数据" keys={keys} rows={rows} /></section>;
+  return <section className={`player-section-table${columns.length >= 6 ? " is-wide" : ""}`}><div>{title}</div><PlayerSimpleTable columns={columns} emptyText="暂无数据" keys={keys} rows={rows} /></section>;
 }
 
 function BindUidPage({ postWithToken }: { postWithToken: (endpoint: string, body: unknown) => Promise<ApiPostResponse> }) {
@@ -2264,6 +2410,199 @@ function SilencePage({ operator }: { operator: string }) {
   );
 }
 
+const SPRINT_ACTIVITY_TYPES: Record<number, string> = {
+  1: "关卡冲刺活动(通关章节)",
+  2: "宠物冲刺活动(抽取宠物)",
+  3: "培育冲刺活动(消耗灵石)",
+  4: "部落保卫战",
+  5: "BB转盘机",
+  6: "挑战冲刺",
+  7: "战力冲刺",
+};
+
+type SprintActivityDraft = {
+  id: number;
+  serverIds: string;
+  type: string;
+  timeBegin: string;
+  timeEnd: string;
+};
+
+function parseSprintActivities(payload: unknown): SprintActivity[] {
+  return getArray(getApiData(payload)?.Lst).flatMap((item) => {
+    const row = getObject(item);
+    if (!row) return [];
+    const activity = {
+      SvrId: Number(row.SvrId),
+      Typ: Number(row.Typ),
+      TimeBegin: parseTimeSeconds(row.TimeBegin),
+      TimeEnd: parseTimeSeconds(row.TimeEnd),
+    };
+    return Number.isInteger(activity.SvrId) && activity.SvrId > 0 && Number.isInteger(activity.Typ) && activity.Typ > 0
+      ? [activity]
+      : [];
+  });
+}
+
+function SprintActivityPage({ postWithToken }: { postWithToken: (endpoint: string, body: unknown) => Promise<ApiPostResponse> }) {
+  const [activities, setActivities] = React.useState<SprintActivity[]>([]);
+  const [loading, setLoading] = React.useState(true);
+  const [editingIndex, setEditingIndex] = React.useState<number | null | undefined>(undefined);
+  const [toast, setToast] = React.useState<{ kind: "success" | "error"; message: string } | null>(null);
+
+  const loadActivities = async () => {
+    setLoading(true);
+    try {
+      const result = await postWithToken("/gmSprintLst", {});
+      const error = apiBusinessError(result);
+      if (error) throw new Error(error);
+      setActivities(parseSprintActivities(result.payload));
+    } catch (error) {
+      setToast({ kind: "error", message: error instanceof Error ? `查询失败：${error.message}` : "查询冲刺活动失败" });
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  React.useEffect(() => {
+    void loadActivities();
+  }, []);
+
+  const saveActivities = async (rows: SprintActivity[]) => {
+    const next = editingIndex === null
+      ? [...activities, ...rows]
+      : activities.flatMap((activity, index) => index === editingIndex ? rows : [activity]);
+    const result = await postWithToken("/gmSprintAddLst", { Lst: next });
+    const error = apiBusinessError(result);
+    if (error) throw new Error(error);
+    const returned = parseSprintActivities(result.payload);
+    setActivities(returned.length || next.length === 0 ? returned : next);
+    setEditingIndex(undefined);
+    setToast({ kind: "success", message: editingIndex === null ? "冲刺活动创建成功" : "冲刺活动更新成功" });
+  };
+
+  const displayRows = activities
+    .map((activity, index) => ({ activity, index }))
+    .sort((left, right) => right.activity.TimeBegin - left.activity.TimeBegin || right.index - left.index);
+
+  return (
+    <section className="sprint-page">
+      <div className="sprint-page-heading">
+        <div><Trophy size={21} /><h2>冲刺活动</h2></div>
+        <div className="sprint-toolbar">
+          <button className="primary-button" onClick={() => setEditingIndex(null)} type="button"><Plus size={16} />新建</button>
+          <button className="sprint-icon-button" disabled={loading} onClick={() => void loadActivities()} title="刷新活动列表" type="button"><RefreshCw className={loading ? "spinning" : ""} size={17} /></button>
+        </div>
+      </div>
+      <div className="sprint-table-card">
+        <div className="table-scroll">
+          <table className="sprint-table">
+            <thead><tr><th>服务器ID</th><th>活动</th><th>额外活动类型</th><th>开始时间</th><th>结束时间</th><th>操作</th></tr></thead>
+            <tbody>
+              {!loading && displayRows.map(({ activity, index }) => (
+                <tr key={`${activity.SvrId}-${activity.Typ}-${activity.TimeBegin}-${index}`}>
+                  <td>{activity.SvrId}</td>
+                  <td>{SPRINT_ACTIVITY_TYPES[activity.Typ] ?? `未知活动(${activity.Typ})`}</td>
+                  <td>无</td>
+                  <td>{formatTimestamp(activity.TimeBegin)}</td>
+                  <td>{formatTimestamp(activity.TimeEnd)}</td>
+                  <td><button className="sprint-edit-button" onClick={() => setEditingIndex(index)} type="button"><Pencil size={14} />编辑</button></td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+        {loading && <div className="sprint-empty"><RefreshCw className="spinning" size={24} /><span>正在查询活动...</span></div>}
+        {!loading && activities.length === 0 && <div className="sprint-empty"><Trophy size={28} /><strong>暂无数据</strong></div>}
+      </div>
+      {editingIndex !== undefined && (
+        <SprintActivityModal
+          activity={editingIndex === null ? undefined : activities[editingIndex]}
+          onClose={() => setEditingIndex(undefined)}
+          onSave={saveActivities}
+        />
+      )}
+      {toast && <TransientToast kind={toast.kind} message={toast.message} onClose={() => setToast(null)} />}
+    </section>
+  );
+}
+
+function SprintActivityModal({ activity, onClose, onSave }: { activity?: SprintActivity; onClose: () => void; onSave: (rows: SprintActivity[]) => Promise<void> }) {
+  const [drafts, setDrafts] = React.useState<SprintActivityDraft[]>(activity ? [{ id: Date.now(), serverIds: String(activity.SvrId), type: String(activity.Typ), timeBegin: secondsToDatetimeLocal(activity.TimeBegin), timeEnd: secondsToDatetimeLocal(activity.TimeEnd) }] : []);
+  const [error, setError] = React.useState("");
+  const [saving, setSaving] = React.useState(false);
+
+  React.useEffect(() => {
+    const previous = document.body.style.overflow;
+    document.body.style.overflow = "hidden";
+    return () => { document.body.style.overflow = previous; };
+  }, []);
+
+  const addDraft = () => setDrafts((current) => [...current, { id: Date.now() + current.length, serverIds: "", type: "", timeBegin: "", timeEnd: "" }]);
+  const updateDraft = (id: number, patch: Partial<SprintActivityDraft>) => setDrafts((current) => current.map((draft) => draft.id === id ? { ...draft, ...patch } : draft));
+  const removeDraft = (id: number) => setDrafts((current) => current.filter((draft) => draft.id !== id));
+
+  const submit = async () => {
+    if (!drafts.length) {
+      setError("请至少添加一个活动");
+      return;
+    }
+    const rows: SprintActivity[] = [];
+    for (let index = 0; index < drafts.length; index += 1) {
+      const draft = drafts[index];
+      const prefix = drafts.length > 1 ? `活动${index + 1}：` : "";
+      if (!draft.type) { setError(`${prefix}未选择活动类型`); return; }
+      if (!draft.serverIds.trim()) { setError(`${prefix}未填写服务器ID`); return; }
+      const ids = draft.serverIds.split(/[,，\s]+/).filter(Boolean).map(Number);
+      if (!ids.length || ids.some((id) => !Number.isInteger(id) || id <= 0)) { setError(`${prefix}服务器ID必须为正整数，多个ID请用逗号分隔`); return; }
+      if (!draft.timeBegin) { setError(`${prefix}未填写开始时间`); return; }
+      if (!draft.timeEnd) { setError(`${prefix}未填写结束时间`); return; }
+      const timeBegin = parseDatetimeLocalSeconds(draft.timeBegin);
+      const timeEnd = parseDatetimeLocalSeconds(draft.timeEnd);
+      if (timeEnd <= timeBegin) { setError(`${prefix}结束时间必须晚于开始时间`); return; }
+      Array.from(new Set(ids)).forEach((serverId) => rows.push({ SvrId: serverId, Typ: Number(draft.type), TimeBegin: timeBegin, TimeEnd: timeEnd }));
+    }
+    setError("");
+    setSaving(true);
+    try {
+      await onSave(rows);
+    } catch (saveError) {
+      setError(saveError instanceof Error ? `保存失败：${saveError.message}` : "保存冲刺活动失败");
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  return (
+    <div className="modal-backdrop sprint-modal-backdrop" onMouseDown={(event) => { if (event.target === event.currentTarget && !saving) onClose(); }} role="presentation">
+      <section aria-labelledby="sprint-modal-title" aria-modal="true" className="sprint-modal" role="dialog">
+        <header><h3 id="sprint-modal-title">{activity ? "编辑活动" : "新建活动"}</h3><button disabled={saving} onClick={onClose} title="关闭" type="button"><X size={19} /></button></header>
+        <div className="sprint-modal-body">
+          {drafts.map((draft, index) => (
+            <div className="sprint-draft" key={draft.id}>
+              <strong>活动{index + 1}</strong>
+              <div className="sprint-draft-fields">
+                <select aria-label={`活动${index + 1}类型`} value={draft.type} onChange={(event) => updateDraft(draft.id, { type: event.target.value })}>
+                  <option value="">请选择活动类型</option>
+                  {Object.entries(SPRINT_ACTIVITY_TYPES).map(([value, label]) => <option key={value} value={value}>{label}({value})</option>)}
+                </select>
+                <label className="sprint-server-input"><span>服务器ID:</span><input inputMode="numeric" placeholder="服务器ID，多个请用英文逗号隔开" value={draft.serverIds} onChange={(event) => updateDraft(draft.id, { serverIds: event.target.value })} /></label>
+                <input aria-label="开始时间" type="datetime-local" value={draft.timeBegin} onChange={(event) => updateDraft(draft.id, { timeBegin: event.target.value })} />
+                <select aria-label="时间模式" defaultValue="date"><option value="date">日期</option></select>
+                <input aria-label="结束时间" type="datetime-local" value={draft.timeEnd} onChange={(event) => updateDraft(draft.id, { timeEnd: event.target.value })} />
+                <button className="sprint-remove-button" onClick={() => removeDraft(draft.id)} title="删除本条活动" type="button"><Trash2 size={17} /><span>删除</span></button>
+              </div>
+            </div>
+          ))}
+          <button className="sprint-add-row" onClick={addDraft} type="button"><Plus size={15} />添加活动</button>
+          {error && <div className="sprint-form-error" role="alert">{error}</div>}
+        </div>
+        <footer><button disabled={saving} onClick={onClose} type="button">取消</button><button className="primary-button" disabled={saving} onClick={() => void submit()} type="button">{saving ? "提交中..." : "确定"}</button></footer>
+      </section>
+    </div>
+  );
+}
+
 function OpenServerPage({ postWithToken }: { postWithToken: (endpoint: string, body: unknown) => Promise<ApiPostResponse> }) {
   const [svrIdQuery, setSvrIdQuery] = React.useState("");
   const [nextTime, setNextTime] = React.useState("");
@@ -2373,6 +2712,8 @@ function MailSuitePage({ active, canUploadItemTable, postWithToken, session, set
   const [rewardTemplates, setRewardTemplates] = React.useState<RewardTemplate[]>([]);
   const [mailRows, setMailRows] = React.useState<Record<string, unknown>[]>([]);
   const [localMailRows, setLocalMailRows] = React.useState<Record<string, unknown>[]>([]);
+  const [claimRows, setClaimRows] = React.useState<Record<string, unknown>[]>([]);
+  const [claimLoading, setClaimLoading] = React.useState(false);
   const [view, setView] = React.useState<"list" | "edit">("list");
   const [recordTab, setRecordTab] = React.useState<"mail" | "claim">("mail");
   const [userIdQuery, setUserIdQuery] = React.useState("");
@@ -2416,6 +2757,17 @@ function MailSuitePage({ active, canUploadItemTable, postWithToken, session, set
     await fetch(`/local-api/mail-groups/${encodeURIComponent(id)}`, { method: "DELETE" }).catch(() => undefined);
   };
 
+  const fetchPlayerPersonalMails = React.useCallback(async (userId: number) => {
+    const result = await postWithToken("/gmQueryPlayerMail", { UserId: userId });
+    const error = apiBusinessError(result);
+    if (error) throw new Error(error);
+    const data = getApiData(result.payload);
+    const personalInfo = parseObject(objectValue(data, "MailInfo"));
+    return getArray(objectValue(personalInfo, "Lst"))
+      .map((item) => parseObject(item))
+      .filter((item): item is Record<string, unknown> => Boolean(item));
+  }, [postWithToken]);
+
   const refreshMailList = React.useCallback(async () => {
     const result = await postWithToken("/gmMailLst", {});
     const error = apiBusinessError(result);
@@ -2429,13 +2781,92 @@ function MailSuitePage({ active, canUploadItemTable, postWithToken, session, set
       .map((row) => getObject(row))
       .filter((row): row is Record<string, unknown> => Boolean(row))
       .map((row) => ({ ...row, __mailListType: "global" }));
-    const personalRows = getArray(data?.LstUser)
+    let personalRows = getArray(data?.LstUser)
       .map((row) => getObject(row))
       .filter((row): row is Record<string, unknown> => Boolean(row))
-      .map((row) => ({ ...row, Typ: row.Typ ?? 3, __mailListType: "personal" }));
+      .map((row): Record<string, unknown> => ({ ...row, Typ: row.Typ ?? 3, __mailListType: "personal" }));
+
+    setMailRows([...globalRows, ...personalRows]);
+    if (active !== "mailPersonal") return;
+    const userIds = new Set<number>();
+    personalRows.forEach((row) => {
+      getArray(row.TargetID)
+        .map((targetId) => Number(targetId))
+        .filter((targetId) => Number.isSafeInteger(targetId) && targetId > 0)
+        .forEach((targetId) => userIds.add(targetId));
+    });
+    const claimStateByMailId = new Map<string, Record<string, unknown>>();
+    const users = [...userIds];
+    for (const userChunk of chunkArray(users, 5)) {
+      const results = await Promise.all(userChunk.map(async (userId) => {
+        try {
+          return await fetchPlayerPersonalMails(userId);
+        } catch {
+          return [];
+        }
+      }));
+      results.flat().forEach((playerMail) => {
+        const mailId = String(playerMail.ID ?? playerMail.Id ?? "").trim();
+        if (mailId) claimStateByMailId.set(mailId, playerMail);
+      });
+    }
+    personalRows = personalRows.map((row) => {
+      const mailId = String(row.Id ?? row.ID ?? row.id ?? "").trim();
+      const claimState = claimStateByMailId.get(mailId);
+      return claimState ? { ...row, ...claimState, Id: row.Id ?? row.ID ?? row.id, __claimStateKnown: true } : row;
+    });
+    setLocalMailRows((current) => current.map((row) => {
+      const mailId = String(row.Id ?? row.ID ?? row.id ?? "").trim();
+      const claimState = claimStateByMailId.get(mailId);
+      return claimState ? { ...row, ...claimState, Id: row.Id ?? row.ID ?? row.id, __claimStateKnown: true } : row;
+    }));
     const rows = [...globalRows, ...personalRows];
     setMailRows(rows);
-  }, [postWithToken]);
+  }, [active, fetchPlayerPersonalMails, postWithToken]);
+
+  const queryPlayerMails = React.useCallback(async () => {
+    const normalizedUserId = userIdQuery.trim();
+    if (!normalizedUserId) {
+      setClaimRows([]);
+      setStatus("请输入用户ID");
+      return;
+    }
+    if (!/^\d+$/.test(normalizedUserId) || Number(normalizedUserId) <= 0) {
+      setClaimRows([]);
+      setStatus("用户ID必须为正整数");
+      return;
+    }
+
+    setClaimLoading(true);
+    setStatus("");
+    try {
+      const result = await postWithToken("/gmQueryPlayerMail", { UserId: Number(normalizedUserId) });
+      const error = apiBusinessError(result);
+      if (error) {
+        setClaimRows([]);
+        setStatus(/用户|UserId|not exist|不存在/i.test(error) ? "用户id不存在" : `领取记录查询失败：${error}`);
+        return;
+      }
+      const data = getApiData(result.payload);
+      const personalInfo = parseObject(objectValue(data, "MailInfo"));
+      const globalInfo = parseObject(objectValue(data, "GmMailInfo"));
+      const toRows = (value: unknown, source: "个人邮件" | "全局邮件"): Record<string, unknown>[] => getArray(value)
+        .map((item) => parseObject(item))
+        .filter((item): item is Record<string, unknown> => Boolean(item))
+        .map((item): Record<string, unknown> => ({ ...item, __claimSource: source }));
+      const rows = [
+        ...toRows(objectValue(personalInfo, "Lst"), "个人邮件"),
+        ...toRows(objectValue(globalInfo, "Lst"), "全局邮件"),
+      ].sort((left, right) => mailIdTimestampSeconds(right.ID ?? right.Id) - mailIdTimestampSeconds(left.ID ?? left.Id));
+      setClaimRows(rows);
+      setStatus(rows.length ? `查询成功，共找到 ${rows.length} 封邮件` : "该用户暂无邮件记录");
+    } catch (queryError) {
+      setClaimRows([]);
+      setStatus(queryError instanceof Error ? `领取记录查询失败：${queryError.message}` : "领取记录查询失败");
+    } finally {
+      setClaimLoading(false);
+    }
+  }, [postWithToken, userIdQuery]);
 
   React.useEffect(() => {
     void refreshLocalMailData().catch(() => undefined);
@@ -2556,8 +2987,6 @@ function MailSuitePage({ active, canUploadItemTable, postWithToken, session, set
               throw new Error("用户id不存在");
             }
             if (!conditionRows.some((row) => row.value.trim())) {
-              serverBody.RegtBegin = 0;
-              serverBody.Regt = 0;
               serverBody.Platform = [];
               serverBody.Version = [];
             } else {
@@ -2767,6 +3196,8 @@ function MailSuitePage({ active, canUploadItemTable, postWithToken, session, set
       serverOptions={serverOptions}
       mailRows={mailRows}
       localMailRows={localMailRows}
+      claimRows={claimRows}
+      claimLoading={claimLoading}
       recordTab={recordTab}
       setRecordTab={setRecordTab}
       status={status}
@@ -2790,10 +3221,26 @@ function MailSuitePage({ active, canUploadItemTable, postWithToken, session, set
           } catch {
             latestRow = row;
           }
-          const hasRewards = getArray(latestRow.ItemLst).length > 0;
-          if (mailRowClaimed(latestRow) || (hasRewards && !mailRowClaimStateKnown(latestRow))) {
+          if (mailRowClaimed(latestRow)) {
             setStatus("邮件被领取，不能进行编辑重新发送");
             return;
+          }
+          const targetIds = getArray(latestRow.TargetID ?? row.TargetID)
+            .map((targetId) => Number(targetId))
+            .filter((targetId) => Number.isSafeInteger(targetId) && targetId > 0);
+          if (targetIds.length) {
+            try {
+              const playerMailRows = (await Promise.all(targetIds.map((targetId) => fetchPlayerPersonalMails(targetId)))).flat();
+              const matchedMail = playerMailRows.find((playerMail) => String(playerMail.ID ?? playerMail.Id ?? "") === id);
+              if (matchedMail && mailRowClaimed(matchedMail)) {
+                setStatus("邮件被领取，不能进行编辑重新发送");
+                await refreshMailList();
+                return;
+              }
+            } catch (claimError) {
+              setStatus(claimError instanceof Error ? `领取状态查询失败：${claimError.message}` : "领取状态查询失败，请稍后重试");
+              return;
+            }
           }
         }
         setEditingMailRow(row);
@@ -2829,11 +3276,12 @@ function MailSuitePage({ active, canUploadItemTable, postWithToken, session, set
         await refreshMailList();
       }}
       onRefresh={() => void refreshMailList()}
+      onQueryClaims={() => void queryPlayerMails()}
     />
   );
 }
 
-function MailListPage({ active, localMailRows, mailRows, onClearStatus, onCreate, onDelete, onEdit, onRefresh, recordTab, serverOptions, setRecordTab, setUserIdQuery, status, userIdQuery }: { active: MailSectionKey; localMailRows: Record<string, unknown>[]; mailRows: Record<string, unknown>[]; onClearStatus: () => void; onCreate: () => void; onDelete: (id: string) => Promise<void>; onEdit: (row: Record<string, unknown>) => void | Promise<void>; onRefresh: () => void; recordTab: "mail" | "claim"; serverOptions: ServerOption[]; setRecordTab: (tab: "mail" | "claim") => void; setUserIdQuery: (value: string) => void; status: string; userIdQuery: string }) {
+function MailListPage({ active, claimLoading, claimRows, localMailRows, mailRows, onClearStatus, onCreate, onDelete, onEdit, onQueryClaims, onRefresh, recordTab, serverOptions, setRecordTab, setUserIdQuery, status, userIdQuery }: { active: MailSectionKey; claimLoading: boolean; claimRows: Record<string, unknown>[]; localMailRows: Record<string, unknown>[]; mailRows: Record<string, unknown>[]; onClearStatus: () => void; onCreate: () => void; onDelete: (id: string) => Promise<void>; onEdit: (row: Record<string, unknown>) => void | Promise<void>; onQueryClaims: () => void; onRefresh: () => void; recordTab: "mail" | "claim"; serverOptions: ServerOption[]; setRecordTab: (tab: "mail" | "claim") => void; setUserIdQuery: (value: string) => void; status: string; userIdQuery: string }) {
   const global = active === "mailGlobal";
   const groupedMailIds = new Set(localMailRows.flatMap((row) => mailGroupIds(row)));
   const mergedRows = [...localMailRows, ...mailRows.filter((row) => !groupedMailIds.has(String(row.Id ?? row.id ?? "")))];
@@ -2853,8 +3301,30 @@ function MailListPage({ active, localMailRows, mailRows, onClearStatus, onCreate
     return (
       <section className="mail-page">
         <div className="mail-tabs"><button onClick={() => setRecordTab("mail")} type="button">全局邮件</button><button className="active" type="button">领取记录</button></div>
-        <div className="mail-filter-line"><label>用户 ID：<input value={userIdQuery} onChange={(event) => setUserIdQuery(event.target.value)} /></label><button onClick={onRefresh} type="button"><Search size={14} />Search</button></div>
-        <MailDataTable columns={["邮件ID", "邮件名称", "是否查看", "是否领取", "查看时间", "领取时间", "生效时间", "过期时间"]} rows={[]} />
+        <div className="mail-filter-line">
+          <label>用户 ID：<input inputMode="numeric" value={userIdQuery} onChange={(event) => setUserIdQuery(event.target.value)} onKeyDown={(event) => { if (event.key === "Enter" && !claimLoading) onQueryClaims(); }} /></label>
+          <button disabled={claimLoading} onClick={onQueryClaims} type="button"><Search size={14} />{claimLoading ? "查询中..." : "查询"}</button>
+        </div>
+        <section className="mail-table-card">
+          <PaginatedMailDataTable
+            columns={["邮件ID", "邮件名称", "邮件类型", "是否查看", "是否领取", "查看时间", "领取时间", "生效时间", "过期时间"]}
+            rows={claimRows.map((row) => {
+              const state = Number(row.Type2 ?? 0);
+              return {
+                邮件ID: formatCell(row.ID ?? row.Id),
+                邮件名称: formatCell(row.Titel ?? row.Title ?? row.SenderName),
+                邮件类型: formatCell(row.__claimSource),
+                是否查看: (state & 0x02) !== 0 ? "已查看" : "未查看",
+                是否领取: (state & 0x04) !== 0 ? "已领取" : "未领取",
+                查看时间: formatTimestamp(row.ReadTime ?? row.ViewTime ?? row.OpenTime),
+                领取时间: formatTimestamp(row.GetTime ?? row.ClaimTime ?? row.ReceiveTime),
+                生效时间: Number(row.St) > 0 ? formatTimestamp(row.St) : "立即生效",
+                过期时间: Number(row.Et) > 0 ? formatTimestamp(row.Et) : "永久有效",
+              };
+            })}
+          />
+        </section>
+        <TransientToast kind={status.includes("失败") || status.includes("错误") || status.includes("不存在") || status.includes("请输入") || status.includes("必须") ? "error" : "success"} message={status} onClose={onClearStatus} />
       </section>
     );
   }
@@ -2874,19 +3344,20 @@ function MailListPage({ active, localMailRows, mailRows, onClearStatus, onCreate
             const isServerMail = typ === 2;
             const typeName = isServerMail ? "区服" : row.__mailListType === "personal" || typ === 3 || (!typ && targetIds.length > 0) ? "个人" : "全局";
             const title = formatCell(row.Titel ?? row.Title ?? "自定义邮件");
-            const state = Number(row.St);
             const statusText = row.__scheduled
               ? row.__scheduledStatus === "failed" ? `定时失败：${formatCell(row.__scheduledError)}` : "待发送"
-              : mailRowClaimed(row) ? "已领取" : state > 0 ? `状态 ${state}` : "未领取";
+              : typeName === "个人" ? mailRowClaimed(row) ? "已领取" : "未领取" : "已发送";
             const rawCreatedAt = row.CreateTime ?? row.CreatedAt ?? row.Ct ?? row.createdAt;
             const createdAtFallback = row.__local || row.__scheduled ? formatTimestampValue(rawCreatedAt) : "暂无数据";
             const regEnd = row.RegtEnd ?? row.Regt;
+            const sentAtFallback = parseTimeSeconds(rawCreatedAt) || mailIdTimestampSeconds(id);
+            const regEndFallback = sentAtFallback ? formatTimestamp(sentAtFallback) : "暂无数据";
             return {
               ID: <span className="mail-id-cell"><span>{id}</span><em>{typeName}</em></span>,
               邮件名称: title,
               目标: <MailTargetSummary row={row} serverOptions={serverOptions} />,
               状态: statusText,
-              时间: <span className="mail-time-cell"><span>注册开始: {formatMailListTime(row.RegtBegin, "2020-01-01 00:00")}</span><span>注册结束: {formatMailListTime(regEnd, defaultMailRegEndDisplay())}</span><span>生效时间: {formatMailListTime(row.St, "立即生效")}</span><span>过期时间: {formatMailListTime(row.Et, "2050-12-31 23:59")}</span><span>创建时间: {formatMailListTime(rawCreatedAt, createdAtFallback)}</span></span>,
+              时间: <span className="mail-time-cell"><span>注册开始: {formatMailListTime(row.RegtBegin, "2020-01-01 00:00")}</span><span>注册结束: {formatMailListTime(regEnd, regEndFallback)}</span><span>生效时间: {formatMailListTime(row.St, "立即生效")}</span><span>过期时间: {formatMailListTime(row.Et, "2050-12-31 23:59")}</span><span>创建时间: {formatMailListTime(rawCreatedAt, createdAtFallback)}</span></span>,
               操作: <div className="mail-action-buttons"><button onClick={() => void onEdit(row)} type="button">编辑</button><button onClick={() => void onDelete(id)} type="button">撤回</button></div>,
             };
           })}
@@ -3180,9 +3651,8 @@ function MailEditor({ canUploadItemTable, global, initialMail, items, onBack, on
     const serverTargetIds = isGlobalMail ? serverConditionIds(conditionRows, serverOptions) : [];
     const regBeginValues = conditionRows.filter((row) => row.field === "regTime" && row.op === ">=" && row.value).map((row) => parseDatetimeLocalSeconds(dateToDatetimeLocal(row.value)));
     const regEndValues = conditionRows.filter((row) => row.field === "regTime" && row.op === "<=" && row.value).map((row) => parseDatetimeLocalSeconds(dateToDatetimeLocal(row.value, true)));
-    const hasRegCondition = conditionRows.some((row) => row.field === "regTime" && row.value.trim());
-    const regBeginSeconds = regBeginValues.length ? Math.max(...regBeginValues) : 0;
-    const regEndSeconds = regEndValues.length ? Math.min(...regEndValues) : hasRegCondition ? parseDatetimeLocalSeconds(defaultRegEndTime()) : 0;
+    const regBeginSeconds = regBeginValues.length ? Math.max(...regBeginValues) : parseDatetimeLocalSeconds(MAIL_DEFAULT_REG_BEGIN);
+    const regEndSeconds = regEndValues.length ? Math.min(...regEndValues) : nowSeconds;
     if (regBeginValues.some((value) => !value) || regEndValues.some((value) => !value)) {
       setError("请选择有效的注册时间区间");
       return;
@@ -3452,6 +3922,7 @@ function MailTemplateEditor({ endpoint = "/local-api/mail-templates", kind = "�
     return normalizeLanguageContents(template?.contents, template ? { title: template.title ?? "", body: template.body ?? "" } : undefined);
   });
   const activeContent = contents[activeLanguage] ?? { title: "", body: "" };
+  const templateNameMaxLength = kind === "公告" ? MAX_NOTICE_TEMPLATE_NAME_LENGTH : MAX_TEMPLATE_NAME_LENGTH;
   const updateContent = (patch: Partial<MailTemplateContent>) => {
     setContents((current) => ({ ...current, [activeLanguage]: { ...(current[activeLanguage] ?? { title: "", body: "" }), ...patch } }));
   };
@@ -3482,11 +3953,19 @@ function MailTemplateEditor({ endpoint = "/local-api/mail-templates", kind = "�
       setError("请输入模板名称");
       return;
     }
-    if (cleanName.length > MAX_TEMPLATE_NAME_LENGTH) {
-      setError(`模板名称最多${MAX_TEMPLATE_NAME_LENGTH}个字符`);
+    if (cleanName.length > templateNameMaxLength) {
+      setError(`模板名称最多${templateNameMaxLength}个字符`);
       return;
     }
     const cleanedContents = Object.fromEntries(mailLanguages.map((language) => [language, { title: contents[language]?.title.trim() ?? "", body: contents[language]?.body.trim() ?? "" }])) as Record<string, MailTemplateContent>;
+    if (kind === "公告") {
+      const overlongTitle = Object.entries(cleanedContents).find(([, content]) => content.title.length > MAX_NOTICE_TITLE_LENGTH);
+      if (overlongTitle) {
+        setError(`${overlongTitle[0]}公告标题最多${MAX_NOTICE_TITLE_LENGTH}个字符`);
+        setActiveLanguage(overlongTitle[0]);
+        return;
+      }
+    }
     const englishContent = cleanedContents[defaultMailLanguage] ?? { title: "", body: "" };
     if (!englishContent.title || !englishContent.body) {
       setError(kind === "公告" ? "至少填写一个英文公告标题和英文公告内容" : "至少填写一个英语标题和英语内容");
@@ -3499,8 +3978,8 @@ function MailTemplateEditor({ endpoint = "/local-api/mail-templates", kind = "�
     try {
       const primary = filledContents[defaultMailLanguage].title && filledContents[defaultMailLanguage].body ? filledContents[defaultMailLanguage] : Object.values(filledContents).find((content) => content.title && content.body) ?? { title: "", body: "" };
       const response = await fetch(endpoint, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ id: template?.id, name: cleanName, title: primary.title, body: primary.body, contents: filledContents }) });
-      if (!response.ok) throw new Error(`HTTP ${response.status}`);
-      const payload = (await response.json().catch(() => ({}))) as { template?: MailTemplate };
+      const payload = (await response.json().catch(() => ({}))) as { error?: string; template?: MailTemplate };
+      if (!response.ok) throw new Error(payload.error || `HTTP ${response.status}`);
       const nowSeconds = Math.floor(Date.now() / 1000);
       onSaved(payload.template ?? { id: template?.id ?? `t-${Date.now()}`, name: cleanName, title: primary.title, body: primary.body, contents: filledContents, createdAt: template?.createdAt ?? String(nowSeconds), updatedAt: String(nowSeconds) });
     } catch (saveError) {
@@ -3513,11 +3992,11 @@ function MailTemplateEditor({ endpoint = "/local-api/mail-templates", kind = "�
     <section className="mail-edit-page">
       <div className="mail-edit-card">
         <header>{kind}模板</header>
-        <div className="mail-template-name"><label>模板名称<input maxLength={MAX_TEMPLATE_NAME_LENGTH} value={name} onChange={(event) => setName(event.target.value)} placeholder="请输入模板名称" /></label><small>{name.length}/{MAX_TEMPLATE_NAME_LENGTH}</small></div>
+        <div className="mail-template-name"><label>模板名称<input maxLength={templateNameMaxLength} value={name} onChange={(event) => setName(event.target.value)} placeholder="请输入模板名称" /></label><small>{name.length}/{templateNameMaxLength}</small></div>
         {error && <div className="mail-template-alert">{error}</div>}
         <div className="mail-language-tabs">{languageDefinitions.map((language) => <button className={activeLanguage === language.label ? "active" : ""} key={language.id} onClick={() => setActiveLanguage(language.label)} type="button"><small>{language.id}</small>{language.label}</button>)}</div>
         <div className="mail-form mail-template-form">
-          <label className="mail-form-row"><span>{kind}标题</span><input value={activeContent.title} onChange={(event) => updateContent({ title: event.target.value })} placeholder={`请输入${activeLanguage}${kind}标题`} /></label>
+          <label className="mail-form-row"><span>{kind}标题</span><div className={kind === "公告" ? "mail-limited-input" : ""}><input maxLength={kind === "公告" ? MAX_NOTICE_TITLE_LENGTH : undefined} value={activeContent.title} onChange={(event) => updateContent({ title: event.target.value })} placeholder={`请输入${activeLanguage}${kind}标题`} />{kind === "公告" && <small>{activeContent.title.length}/{MAX_NOTICE_TITLE_LENGTH}</small>}</div></label>
           <label className="mail-form-row mail-template-body"><span>{kind}内容</span><textarea value={activeContent.body} onChange={(event) => updateContent({ body: event.target.value })} placeholder={`请输入${activeLanguage}${kind}内容`} /></label>
           <div className="mail-form-row">
             <span>模板文件</span>
@@ -3968,6 +4447,18 @@ function NoticePage({ postWithToken }: { postWithToken: (endpoint: string, body:
     versions: notice.versions ?? "",
     conditions: Array.isArray(notice.conditions) ? notice.conditions : noticeConditionsFromFields(notice),
   });
+  const findNoticeTemplate = (notice: Partial<NoticeConfig>) => {
+    const explicitName = String(notice.templateName ?? "").trim();
+    const explicitMatch = explicitName ? noticeTemplates.find((template) => template.name === explicitName) : undefined;
+    if (explicitMatch) return explicitMatch;
+    const noticeContents = normalizeLanguageContents(notice.contents, { title: notice.title ?? "", body: notice.body ?? "" });
+    const primary = noticeContents[defaultMailLanguage];
+    return noticeTemplates.find((template) => {
+      const templateContents = normalizeLanguageContents(template.contents, { title: template.title, body: template.body });
+      const templatePrimary = templateContents[defaultMailLanguage];
+      return templatePrimary.title.trim() === primary.title.trim() && templatePrimary.body.trim() === primary.body.trim();
+    });
+  };
 
   const refresh = React.useCallback(async () => {
     const result = await postWithToken("/gmNoticeLst", {});
@@ -4008,10 +4499,14 @@ function NoticePage({ postWithToken }: { postWithToken: (endpoint: string, body:
 
   const openEditor = (notice?: NoticeConfig) => {
     const next = notice ?? notices[0] ?? { slot: 1, title: "", body: "", imagePath: "", typ: 0, sid: "" };
-    const drafts = [1, 2, 3].map((slot) => normalizeNotice(notices.find((item) => Number(item.slot) === slot) ?? emptyNotice(slot), slot));
+    const drafts = [1, 2, 3].map((slot) => {
+      const normalized = normalizeNotice(notices.find((item) => Number(item.slot) === slot) ?? emptyNotice(slot), slot);
+      return { ...normalized, templateName: findNoticeTemplate(normalized)?.name ?? normalized.templateName };
+    });
+    const normalizedNext = normalizeNotice(next, Number(next.slot) || 1);
     setNoticeDrafts(drafts);
     setEditing(next);
-    setForm(normalizeNotice(next, Number(next.slot) || 1));
+    setForm({ ...normalizedNext, templateName: findNoticeTemplate(normalizedNext)?.name ?? normalizedNext.templateName });
   };
 
   const switchNoticeSlot = (slot: number) => {
@@ -4027,6 +4522,11 @@ function NoticePage({ postWithToken }: { postWithToken: (endpoint: string, body:
 
   const save = async () => {
     if (saving) return;
+    const selectedTemplate = noticeTemplates.find((template) => template.name === form.templateName);
+    if (!selectedTemplate) {
+      setStatus("公告保存失败：请选择公告模板");
+      return;
+    }
     const normalizedContents = fillMissingLanguageContents(form.contents, { title: form.title, body: form.body });
     const primaryNoticeContent = normalizedContents[defaultMailLanguage].title && normalizedContents[defaultMailLanguage].body ? normalizedContents[defaultMailLanguage] : Object.values(normalizedContents).find((content) => content.title && content.body) ?? { title: "", body: "" };
     const conditionRows = form.conditions ?? [];
@@ -4079,7 +4579,7 @@ function NoticePage({ postWithToken }: { postWithToken: (endpoint: string, body:
       regBegin: secondsToDatetimeLocal(regBeginSeconds),
       regEnd: secondsToDatetimeLocal(regEndSeconds),
       platforms: platformList.length ? platformList.join(",") : "1,2",
-      versions: versionList.length ? versionList.join(",") : NOTICE_DEFAULT_VERSION_RANGE,
+      versions: versionList.length ? versionList.join(",") : "",
       conditions: conditionRows,
     };
     const normalizedForm = normalizeNotice({ ...effectiveForm, title: primaryNoticeContent.title, body: primaryNoticeContent.body, contents: normalizedContents }, Number(effectiveForm.slot) || 1);
@@ -4115,16 +4615,20 @@ function NoticePage({ postWithToken }: { postWithToken: (endpoint: string, body:
 
   const deleteNotice = async (slot: number) => {
     if (!window.confirm(`确认删除公告 ${slot}？`)) return;
-    const merged = [1, 2, 3].map((itemSlot) => normalizeNotice(itemSlot === slot ? emptyNotice(itemSlot) : notices.find((notice) => Number(notice.slot) === itemSlot) ?? emptyNotice(itemSlot), itemSlot));
-    const result = await postWithToken("/gmNoticeAdd", configsToNoticePayload(merged));
-    const error = apiBusinessError(result);
-    if (error) {
-      setStatus(`公告删除失败：${error}`);
-      return;
+    try {
+      const merged = [1, 2, 3].map((itemSlot) => normalizeNotice(itemSlot === slot ? emptyNotice(itemSlot) : notices.find((notice) => Number(notice.slot) === itemSlot) ?? emptyNotice(itemSlot), itemSlot));
+      const result = await postWithToken("/gmNoticeAdd", configsToNoticePayload(merged));
+      const error = apiBusinessError(result);
+      if (error) {
+        setStatus(`公告删除失败：${error}`);
+        return;
+      }
+      setStatus(`公告 ${slot} 已删除`);
+      if (Number(editing?.slot) === slot) setEditing(null);
+      await refresh();
+    } catch (deleteError) {
+      setStatus(deleteError instanceof Error ? `公告删除失败：${deleteError.message}` : "公告删除失败");
     }
-    setStatus(`公告 ${slot} 已删除`);
-    if (Number(editing?.slot) === slot) setEditing(null);
-    await refresh();
   };
   const noticeFilterFieldOptions = [
     { value: "system", label: "系统" },
@@ -4147,11 +4651,12 @@ function NoticePage({ postWithToken }: { postWithToken: (endpoint: string, body:
               <button className="notice-card-content" onClick={() => openEditor(notice)} type="button">
                 <span className="notice-watermark">admin</span>
                 <strong>公告 {slot}</strong>
-                <h3>{notice.templateName || notice.title || "未配置公告模板"}</h3>
+                <h3>{notice.title || "暂无公告标题"}</h3>
                 <div className="notice-body-box">{notice.title || "暂无公告标题"}</div>
                 <label>配图路径</label>
                 <div className="notice-image-path">{notice.imagePath || "未配置配图路径"}</div>
                 <div className="tag-row">
+                  <small>模板名称：{findNoticeTemplate(notice)?.name || notice.templateName || "未选择"}</small>
                   <small>{Number(notice.typ) === 1 ? `服务器：${formatServerIdList(notice.sid) || "未填写"}` : "范围：全部服务器"}</small>
                   <small>注册开始：{formatBeijingTime(notice.regBegin || NOTICE_DEFAULT_REG_BEGIN)}</small>
                   <small>注册结束：{formatBeijingTime(notice.regEnd || NOTICE_DEFAULT_REG_END)}</small>
@@ -4233,6 +4738,23 @@ function noticePayloadToConfigs(data: Record<string, unknown> | null): NoticeCon
     const sid = data?.[`Sid${slot}`];
     const title = String(data?.[`Titel${suffix}`] ?? "");
     const body = String(data?.[`Body${suffix}`] ?? "");
+    if (!title.trim() && !body.trim()) {
+      return {
+        slot,
+        templateName: "",
+        title: "",
+        body: "",
+        contents: emptyLanguageContents(),
+        imagePath: "",
+        typ: 0,
+        sid: "",
+        regBegin: "",
+        regEnd: "",
+        platforms: "",
+        versions: "",
+        conditions: [],
+      };
+    }
     const contents = parseNoticeLanguageContents(data, slot, { title, body });
     const platformValues = Array.isArray(platform) ? platform.map(Number).filter(Number.isFinite) : [];
     const usesAllPlatforms = platformValues.length === 2 && platformValues.includes(1) && platformValues.includes(2);
@@ -4299,14 +4821,16 @@ function configsToNoticePayload(configs: NoticeConfig[]) {
       || Object.values(rawContents).some((content) => content.title.trim() || content.body.trim())
     );
     if (!hasContent) {
-      payload[`Titel${suffix}`] = "";
-      payload[`Body${suffix}`] = "";
-      payload[`LangLst${slot}`] = [];
-      payload[`Rs${slot}`] = "";
-      payload[`Typ${slot}`] = 0;
-      payload[`RegtBegin${slot}`] = 0;
-      payload[`RegtEnd${slot}`] = 0;
-      payload[`Sid${slot}`] = [];
+      // The game API has three fixed notice slots and no delete endpoint. Newer
+      // servers reject an empty title, so clear a slot with an unreachable row.
+      payload[`Titel${suffix}`] = " ";
+      payload[`Body${suffix}`] = " ";
+      payload[`LangLst${slot}`] = languageDefinitions.map(({ id }) => ({ Language: id, Titel: " ", Body: " " }));
+      payload[`Rs${slot}`] = NOTICE_DEFAULT_IMAGE;
+      payload[`Typ${slot}`] = 1;
+      payload[`RegtBegin${slot}`] = 1;
+      payload[`RegtEnd${slot}`] = 2;
+      payload[`Sid${slot}`] = [NOTICE_DISABLED_SERVER_ID];
       payload[`Platform${slot}`] = [];
       payload[`Version${slot}`] = [];
       continue;
@@ -4317,7 +4841,7 @@ function configsToNoticePayload(configs: NoticeConfig[]) {
       regBegin: config.regBegin || NOTICE_DEFAULT_REG_BEGIN,
       regEnd: config.regEnd || NOTICE_DEFAULT_REG_END,
       platforms: config.platforms || "1,2",
-      versions: config.versions || NOTICE_DEFAULT_VERSION_RANGE,
+      versions: config.versions || "",
     };
     const contents = fillMissingLanguageContents(effectiveConfig.contents, { title: effectiveConfig.title, body: effectiveConfig.body });
     const primary = contents[defaultMailLanguage].title && contents[defaultMailLanguage].body ? contents[defaultMailLanguage] : Object.values(contents).find((content) => content.title || content.body) ?? { title: "", body: "" };
@@ -4335,7 +4859,7 @@ function configsToNoticePayload(configs: NoticeConfig[]) {
     const platforms = toPlatformNumberArray(effectiveConfig.platforms);
     const versions = toNoticeVersionArray(effectiveConfig.versions);
     payload[`Platform${slot}`] = platforms.length ? platforms : [];
-    payload[`Version${slot}`] = versions.length ? versions : [];
+    if (versions.length) payload[`Version${slot}`] = versions;
   }
   return payload;
 }

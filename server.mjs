@@ -497,9 +497,15 @@ async function handleLocalApi(req, res, pathname) {
     const templates = readJson(files.mailTemplates, []);
     const now = Math.floor(Date.now() / 1000);
     const id = String(body.id ?? `t-${Date.now()}`);
-    const existing = Array.isArray(templates) ? templates.find((template) => template.id === id) : null;
-    const next = { id, name: String(body.name ?? "未命名模板").slice(0, 30), title: String(body.title ?? ""), body: String(body.body ?? ""), contents: body.contents && typeof body.contents === "object" ? body.contents : undefined, createdAt: existing?.createdAt ?? now, updatedAt: now };
-    writeJson(files.mailTemplates, [next, ...(Array.isArray(templates) ? templates : []).filter((template) => template.id !== id)]);
+    const templateList = Array.isArray(templates) ? templates : [];
+    const name = String(body.name ?? "未命名模板").trim().slice(0, 30);
+    if (templateList.some((template) => String(template.id) !== id && String(template.name ?? "").trim().toLocaleLowerCase() === name.toLocaleLowerCase())) {
+      sendJson(res, 409, { error: "模板名称已存在，请更换名称" });
+      return true;
+    }
+    const existing = templateList.find((template) => String(template.id) === id);
+    const next = { id, name, title: String(body.title ?? ""), body: String(body.body ?? ""), contents: body.contents && typeof body.contents === "object" ? body.contents : undefined, createdAt: existing?.createdAt ?? now, updatedAt: now };
+    writeJson(files.mailTemplates, [next, ...templateList.filter((template) => String(template.id) !== id)]);
     sendJson(res, 200, { template: next });
     return true;
   }
@@ -523,9 +529,26 @@ async function handleLocalApi(req, res, pathname) {
     const templates = readJson(files.noticeTemplates, []);
     const now = Math.floor(Date.now() / 1000);
     const id = String(body.id ?? `nt-${Date.now()}`);
-    const existing = Array.isArray(templates) ? templates.find((template) => template.id === id) : null;
-    const next = { id, name: String(body.name ?? "未命名模板").slice(0, 30), title: String(body.title ?? ""), body: String(body.body ?? ""), contents: body.contents && typeof body.contents === "object" ? body.contents : undefined, createdAt: existing?.createdAt ?? now, updatedAt: now };
-    writeJson(files.noticeTemplates, [next, ...(Array.isArray(templates) ? templates : []).filter((template) => template.id !== id)]);
+    const templateList = Array.isArray(templates) ? templates : [];
+    const rawName = String(body.name ?? "").trim();
+    if (rawName.length > 20) {
+      sendJson(res, 400, { error: "公告模板名称最多20个字符" });
+      return true;
+    }
+    const rawContents = body.contents && typeof body.contents === "object" ? body.contents : {};
+    const overlongTitle = Object.entries(rawContents).find(([, content]) => String(content?.title ?? "").length > 20);
+    if (String(body.title ?? "").length > 20 || overlongTitle) {
+      sendJson(res, 400, { error: overlongTitle ? `${overlongTitle[0]}公告标题最多20个字符` : "公告标题最多20个字符" });
+      return true;
+    }
+    const name = String(body.name ?? "未命名模板").trim().slice(0, 30);
+    if (templateList.some((template) => String(template.id) !== id && String(template.name ?? "").trim().toLocaleLowerCase() === name.toLocaleLowerCase())) {
+      sendJson(res, 409, { error: "模板名称已存在，请更换名称" });
+      return true;
+    }
+    const existing = templateList.find((template) => String(template.id) === id);
+    const next = { id, name, title: String(body.title ?? ""), body: String(body.body ?? ""), contents: body.contents && typeof body.contents === "object" ? body.contents : undefined, createdAt: existing?.createdAt ?? now, updatedAt: now };
+    writeJson(files.noticeTemplates, [next, ...templateList.filter((template) => String(template.id) !== id)]);
     sendJson(res, 200, { template: next });
     return true;
   }
