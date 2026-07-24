@@ -6,6 +6,7 @@ import {
   ChevronDown,
   CreditCard,
   Database,
+  Download,
   Gift,
   KeyRound,
   LayoutDashboard,
@@ -24,6 +25,7 @@ import {
   SlidersHorizontal,
   Trash2,
   Trophy,
+  Upload,
   UserCog,
   Users,
   X,
@@ -227,6 +229,16 @@ type ConditionRow = {
 type MailRewardItem = {
   itemId: string;
   count: string;
+};
+
+type GiftCodeConfig = {
+  Id: string | string[];
+  Type: number;
+  Group: number | number[];
+  Num: number;
+  Et: number;
+  ItemLst: number[];
+  Desc: string;
 };
 
 const MAX_REWARD_COUNT = 2_000_000_000;
@@ -901,6 +913,69 @@ function objectValue(object: Record<string, unknown> | null, ...keys: string[]) 
 
 function getArray(value: unknown): unknown[] {
   return Array.isArray(value) ? value : [];
+}
+
+function normalizeGiftNumber(value: unknown, fallback = 0) {
+  const numberValue = typeof value === "number" ? value : Number(String(value ?? "").trim());
+  return Number.isFinite(numberValue) ? Math.floor(numberValue) : fallback;
+}
+
+function normalizeGiftNumberArray(value: unknown) {
+  if (Array.isArray(value)) return value.map((item) => normalizeGiftNumber(item)).filter((item) => item > 0);
+  if (typeof value === "string") return toNumberArray(value);
+  const object = getObject(value);
+  if (object) return Object.values(object).map((item) => normalizeGiftNumber(item)).filter((item) => item > 0);
+  const single = normalizeGiftNumber(value);
+  return single > 0 ? [single] : [];
+}
+
+function normalizeGiftCodeList(value: unknown) {
+  if (Array.isArray(value)) return value.map((item) => String(item ?? "").trim()).filter(Boolean);
+  return String(value ?? "")
+    .split(/[\n,，\s]+/)
+    .map((item) => item.trim())
+    .filter(Boolean);
+}
+
+function giftConfigFromObject(source: Record<string, unknown>): GiftCodeConfig | null {
+  const ids = normalizeGiftCodeList(objectValue(source, "Id", "id", "Code", "code", "Codes", "codes"));
+  if (!ids.length) return null;
+  const groups = normalizeGiftNumberArray(objectValue(source, "Group", "group", "GroupId", "groupId", "GroupIds", "groupIds"));
+  const itemList = normalizeGiftNumberArray(objectValue(source, "ItemLst", "itemLst", "Items", "items", "Rewards", "rewards"));
+  return {
+    Id: ids.length === 1 ? ids[0] : ids,
+    Type: normalizeGiftNumber(objectValue(source, "Type", "type"), 1),
+    Group: groups.length > 1 ? groups : groups[0] ?? 1,
+    Num: Math.max(1, normalizeGiftNumber(objectValue(source, "Num", "num", "MaxCount", "maxCount"), 1)),
+    Et: normalizeGiftNumber(objectValue(source, "Et", "et", "ExpireTime", "expireTime", "EndTime", "endTime"), parseDatetimeLocalSeconds(MAIL_DEFAULT_EXPIRE)),
+    ItemLst: itemList,
+    Desc: String(objectValue(source, "Desc", "desc", "Name", "name", "TemplateName", "templateName") ?? "").trim(),
+  };
+}
+
+function giftConfigsFromImportPayload(payload: unknown) {
+  const object = getObject(payload);
+  const source = Array.isArray(payload)
+    ? payload
+    : getArray(objectValue(object, "giftCodes", "GiftCodes", "codes", "Codes", "items", "Items"));
+  const candidates = source.length ? source : object ? [object] : [];
+  return candidates
+    .map((item) => getObject(item))
+    .filter((item): item is Record<string, unknown> => Boolean(item))
+    .map(giftConfigFromObject)
+    .filter((item): item is GiftCodeConfig => Boolean(item));
+}
+
+function downloadJsonFile(filename: string, data: unknown) {
+  const blob = new Blob([JSON.stringify(data, null, 2)], { type: "application/json;charset=utf-8" });
+  const url = URL.createObjectURL(blob);
+  const anchor = document.createElement("a");
+  anchor.href = url;
+  anchor.download = filename;
+  document.body.appendChild(anchor);
+  anchor.click();
+  anchor.remove();
+  URL.revokeObjectURL(url);
 }
 
 function chunkArray<T>(items: T[], size: number) {
@@ -4047,6 +4122,7 @@ function GiftSuitePage({ active, canUploadItemTable, postWithToken }: { active: 
   const [codeQuery, setCodeQuery] = React.useState("");
   const [typeFilter, setTypeFilter] = React.useState("全部");
   const [status, setStatus] = React.useState("");
+  const importInputRef = React.useRef<HTMLInputElement>(null);
 
   const refreshItems = React.useCallback(async () => {
     const response = await fetch("/local-api/items");
@@ -4111,6 +4187,50 @@ function GiftSuitePage({ active, canUploadItemTable, postWithToken }: { active: 
     return true;
   });
 
+  const exportGiftCodes = () => {
+    const giftCodes = filteredRows
+      .map(giftConfigFromObject)
+      .filter((item): item is GiftCodeConfig => Boolean(item));
+    if (!giftCodes.length) {
+      setStatus("没有可导出的礼包码");
+      return;
+    }
+    downloadJsonFile(`礼包码配置_${new Date().toISOString().slice(0, 10)}.json`, {
+      type: "touka-gm-gift-codes",
+      version: 1,
+      exportedAt: new Date().toISOString(),
+      count: giftCodes.length,
+      giftCodes,
+    });
+    setStatus(`已导出 ${giftCodes.length} 条礼包码配置`);
+  };
+
+  const importGiftCodes = async (file: File) => {
+    try {
+      const payload = JSON.parse(await file.text()) as unknown;
+      const configs = giftConfigsFromImportPayload(payload);
+      if (!configs.length) {
+        setStatus("导入失败：配置文件里没有可添加的礼包码");
+        return;
+      }
+      let successCount = 0;
+      const errors: string[] = [];
+      for (const config of configs) {
+        const result = await postWithToken("/gmGiftAdd", config);
+        const error = apiBusinessError(result);
+        if (error) {
+          errors.push(`${normalizeGiftCodeList(config.Id)[0] || "未知礼包码"}：${error}`);
+        } else {
+          successCount += 1;
+        }
+      }
+      await refreshGiftList();
+      setStatus(errors.length ? `导入完成：成功 ${successCount} 条，失败 ${errors.length} 条。${errors[0]}` : `导入成功：已添加 ${successCount} 条礼包码`);
+    } catch (error) {
+      setStatus(error instanceof SyntaxError ? "导入失败：请选择正确的JSON配置文件" : error instanceof Error ? `导入失败：${error.message}` : "导入失败");
+    }
+  };
+
   return (
     <section className="gift-page">
       <div className="gift-filter-bar">
@@ -4120,7 +4240,16 @@ function GiftSuitePage({ active, canUploadItemTable, postWithToken }: { active: 
         <div className="gift-radio-filter"><RadioPill checked={typeFilter === "全部"} label="全部" onChange={() => setTypeFilter("全部")} /><RadioPill checked={typeFilter === "global"} label="global" onChange={() => setTypeFilter("global")} /><RadioPill checked={typeFilter === "personal"} label="personal" onChange={() => setTypeFilter("personal")} /></div>
       </div>
       <section className="gift-table-card">
-        <button className="mail-primary-button" onClick={() => setView("edit")} type="button">新建</button>
+        <div className="gift-table-actions">
+          <button className="mail-primary-button" onClick={() => setView("edit")} type="button">新建</button>
+          <button className="mail-secondary-button" onClick={exportGiftCodes} type="button"><Download size={14} />导出配置</button>
+          <button className="mail-secondary-button" onClick={() => importInputRef.current?.click()} type="button"><Upload size={14} />导入配置</button>
+          <input accept=".json,application/json" hidden ref={importInputRef} onChange={(event) => {
+            const file = event.target.files?.[0];
+            event.currentTarget.value = "";
+            if (file) void importGiftCodes(file);
+          }} type="file" />
+        </div>
         <PaginatedMailDataTable
           columns={["礼包码", "模板名称", "类型", "最多可领", "已下载", "已领取", "是否启用", "生效时间", "过期时间", "操作"]}
           rows={filteredRows.map((row) => {

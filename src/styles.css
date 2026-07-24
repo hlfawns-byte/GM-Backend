@@ -1879,6 +1879,13 @@ tbody tr:hover,
   padding: 14px;
 }
 
+.gift-table-actions {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 16px;
+}
+
 .gift-edit-card {
   display: grid;
   gap: 18px;
@@ -2046,6 +2053,7 @@ tbody tr:hover,
 
 .mail-filter-line button,
 .mail-primary-button,
+.mail-secondary-button,
 .mail-small-button {
   display: inline-flex;
   align-items: center;
@@ -2115,6 +2123,23 @@ tbody tr:hover,
   margin-bottom: 16px;
   padding: 0 16px 0 18px;
   font-size: 14px;
+}
+
+.gift-table-actions .mail-primary-button {
+  margin-bottom: 0;
+}
+
+.mail-secondary-button {
+  height: 36px;
+  border-color: #d8e2ef;
+  color: #40516a;
+  background: #f8fbff;
+}
+
+.mail-secondary-button:hover {
+  border-color: #2f8fea;
+  color: #1d6fc8;
+  background: #f2f8ff;
 }
 
 .mail-tabs {
