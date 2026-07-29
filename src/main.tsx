@@ -286,6 +286,7 @@ const NOTICE_DEFAULT_REG_BEGIN = "2020-01-01T00:00";
 const NOTICE_DEFAULT_REG_END = "2050-12-31T23:59";
 const NOTICE_DEFAULT_IMAGE = "notice_bg_1";
 const NOTICE_DISABLED_SERVER_ID = 2147483647;
+const NOTICE_SECONDARY_BODY_MAX_LENGTH = 620;
 
 function defaultRegEndTime() {
   return toDatetimeLocal(new Date());
@@ -807,6 +808,16 @@ function noticeLangListPayload(contents?: Record<string, MailTemplateContent>) {
     }));
 }
 
+function noticeSecondaryBodyLengthError(slot: number, contents: Record<string, MailTemplateContent>) {
+  if (slot !== 2 && slot !== 3) return "";
+  const tooLong = languageDefinitions.find((language) => {
+    const body = contents[language.label]?.body ?? "";
+    return body.length > NOTICE_SECONDARY_BODY_MAX_LENGTH;
+  });
+  if (!tooLong) return "";
+  return `公告保存失败：公告${slot}${tooLong.label}内容过长，服务器只支持约${NOTICE_SECONDARY_BODY_MAX_LENGTH}个字符，请缩短后再保存`;
+}
+
 async function parseMailTemplateFile(file: File) {
   const workbook = XLSX.read(await file.arrayBuffer(), { type: "array", cellDates: false });
   const sheet = workbook.Sheets[workbook.SheetNames[0]];
@@ -1113,10 +1124,22 @@ function humanizeApiError(message: string, context?: ApiErrorContext) {
 
 function apiBusinessError(result: ApiPostResponse, context?: ApiErrorContext) {
   if (!result.ok) {
-    const payloadError = String(getObject(result.payload)?.error ?? getObject(result.payload)?.result ?? getObject(result.payload)?.message ?? "");
+    const payloadObject = getObject(result.payload);
+    const payloadData = getObject(payloadObject?.data);
+    const payloadError = String(
+      payloadData?.Desc
+      ?? payloadData?.Msg
+      ?? payloadData?.Result
+      ?? payloadObject?.Desc
+      ?? payloadObject?.Msg
+      ?? payloadObject?.error
+      ?? payloadObject?.result
+      ?? payloadObject?.message
+      ?? ""
+    );
     if (payloadError) return humanizeApiError(payloadError, context);
     if (result.status === 405) {
-      if (context === "notice") return "服务器拒绝了公告请求，请检查公告模板、配图路径、区服、系统、版本和注册时间是否符合接口要求";
+      if (context === "notice") return "服务器拒绝了公告请求，请检查公告模板、配图路径、区服、系统、版本和注册时间；公告2/3内容不能过长";
       return "服务器拒绝了请求，请检查奖励数量、道具ID或接口是否支持当前参数";
     }
     return `HTTP ${result.status}`;
@@ -4985,6 +5008,12 @@ function NoticePage({ postWithToken }: { postWithToken: (endpoint: string, body:
       setStatus("公告保存失败：公告模板至少需要填写一个英语标题和英语内容");
       return;
     }
+    const slot = Number(form.slot) || 1;
+    const lengthError = noticeSecondaryBodyLengthError(slot, normalizedContents);
+    if (lengthError) {
+      setStatus(lengthError);
+      return;
+    }
     const conditionRows = form.conditions ?? [];
     const versionList = toVersionConditionArray(conditionRows);
     const platformList = conditionRows.filter((row) => row.field === "system").flatMap((row) => toPlatformNumberArray(row.value));
@@ -5296,9 +5325,6 @@ function configsToNoticePayload(configs: NoticeConfig[]) {
       payload[`Titel${suffix}`] = " ";
       payload[`Body${suffix}`] = " ";
       const emptyLangList = languageDefinitions.map(({ id }) => ({ Language: id, Titel: " ", Body: " " }));
-      if (slot === 1) {
-        payload.LangLst = emptyLangList;
-      }
       payload[`LangLst${slot}`] = emptyLangList;
       payload[`Rs${slot}`] = NOTICE_DEFAULT_IMAGE;
       payload[`Typ${slot}`] = 1;
@@ -5323,9 +5349,6 @@ function configsToNoticePayload(configs: NoticeConfig[]) {
     const langList = noticeLangListPayload(contents);
     payload[`Titel${suffix}`] = primary.title ?? "";
     payload[`Body${suffix}`] = primary.body ?? "";
-    if (slot === 1) {
-      payload.LangLst = langList;
-    }
     payload[`LangLst${slot}`] = langList;
     payload[`Rs${slot}`] = effectiveConfig.imagePath;
     const sid = toFlexibleNumberArray(effectiveConfig.sid);
