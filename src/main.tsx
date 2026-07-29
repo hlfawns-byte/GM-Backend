@@ -1083,7 +1083,9 @@ function playerMatchesMailConditions(player: Record<string, unknown>, conditionR
   return true;
 }
 
-function humanizeApiError(message: string) {
+type ApiErrorContext = "notice";
+
+function humanizeApiError(message: string, context?: ApiErrorContext) {
   if (/(?:Et|过期时间).*(?:当前时间|生效时间|发送时间).*(?:10\s*分钟|间隔|太短|过近)|(?:10\s*分钟|间隔太短).*(?:Et|过期时间)/i.test(message)) {
     return "过期时间间隔太短，请将过期时间设置为发送时间至少 11 分钟后";
   }
@@ -1096,23 +1098,29 @@ function humanizeApiError(message: string) {
   if (/TargetID|UserId|用户.*不存在|玩家.*不存在/i.test(message)) return "用户ID未填写，或用户不存在";
   if (/Platform|平台/i.test(message)) return "系统条件未填写，或选择的系统不支持";
   if (/Version|版本/i.test(message)) return "版本条件未填写，或版本格式不正确";
-  if (/参数错误/.test(message)) return "条件参数填写不完整，请检查区服、系统、版本和时间";
+  if (/参数错误/.test(message)) {
+    if (context === "notice") return "公告参数填写不完整，请检查公告模板、配图路径、区服、系统、版本和注册时间";
+    return "条件参数填写不完整，请检查区服、系统、版本和时间";
+  }
   if (/St.*大于.*0/.test(message)) return "当前接口暂不支持定时生效，请先用立即生效";
   if (/is not exist this key/i.test(message)) return "正式服没有查到这个 UID 对应的账号，请确认 UID 是否属于当前区服/正式服";
   return message;
 }
 
-function apiBusinessError(result: ApiPostResponse) {
+function apiBusinessError(result: ApiPostResponse, context?: ApiErrorContext) {
   if (!result.ok) {
     const payloadError = String(getObject(result.payload)?.error ?? getObject(result.payload)?.result ?? getObject(result.payload)?.message ?? "");
-    if (payloadError) return humanizeApiError(payloadError);
-    if (result.status === 405) return "服务器拒绝了请求，请检查奖励数量、道具ID或接口是否支持当前参数";
+    if (payloadError) return humanizeApiError(payloadError, context);
+    if (result.status === 405) {
+      if (context === "notice") return "服务器拒绝了公告请求，请检查公告模板、配图路径、区服、系统、版本和注册时间是否符合接口要求";
+      return "服务器拒绝了请求，请检查奖励数量、道具ID或接口是否支持当前参数";
+    }
     return `HTTP ${result.status}`;
   }
   const data = getApiData(result.payload);
   const resultCode = data?.Result ?? getObject(result.payload)?.Result;
   if (resultCode !== undefined && Number(resultCode) !== 0) {
-    return humanizeApiError(String(data?.Desc ?? data?.Msg ?? getObject(result.payload)?.result ?? `Result ${resultCode}`));
+    return humanizeApiError(String(data?.Desc ?? data?.Msg ?? getObject(result.payload)?.result ?? `Result ${resultCode}`), context);
   }
   return "";
 }
@@ -4806,7 +4814,7 @@ function NoticePage({ postWithToken }: { postWithToken: (endpoint: string, body:
     try {
       const merged = [1, 2, 3].map((slot) => normalizeNotice(slot === normalizedForm.slot ? normalizedForm : noticeDrafts.find((notice) => Number(notice.slot) === slot) ?? notices.find((notice) => Number(notice.slot) === slot) ?? emptyNotice(slot), slot));
       const result = await postWithToken("/gmNoticeAdd", configsToNoticePayload(merged));
-      const error = apiBusinessError(result);
+      const error = apiBusinessError(result, "notice");
       if (error) {
         setStatus(`公告保存失败：${error}`);
         return;
@@ -4838,7 +4846,7 @@ function NoticePage({ postWithToken }: { postWithToken: (endpoint: string, body:
     try {
       const merged = [1, 2, 3].map((itemSlot) => normalizeNotice(itemSlot === slot ? emptyNotice(itemSlot) : notices.find((notice) => Number(notice.slot) === itemSlot) ?? emptyNotice(itemSlot), itemSlot));
       const result = await postWithToken("/gmNoticeAdd", configsToNoticePayload(merged));
-      const error = apiBusinessError(result);
+      const error = apiBusinessError(result, "notice");
       if (error) {
         setStatus(`公告删除失败：${error}`);
         return;
