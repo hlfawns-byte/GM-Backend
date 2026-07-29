@@ -572,9 +572,9 @@ async function handleLocalApi(req, res, pathname) {
       return true;
     }
     const rawContents = body.contents && typeof body.contents === "object" ? body.contents : {};
-    const overlongTitle = Object.entries(rawContents).find(([, content]) => String(content?.title ?? "").length > 20);
-    if (String(body.title ?? "").length > 20 || overlongTitle) {
-      sendJson(res, 400, { error: overlongTitle ? `${overlongTitle[0]}公告标题最多20个字符` : "公告标题最多20个字符" });
+    const overlongTitle = Object.entries(rawContents).find(([, content]) => String(content?.title ?? "").length > 100);
+    if (String(body.title ?? "").length > 100 || overlongTitle) {
+      sendJson(res, 400, { error: overlongTitle ? `${overlongTitle[0]}公告标题最多100个字符` : "公告标题最多100个字符" });
       return true;
     }
     const name = (rawName || "未命名模板").slice(0, 100);

@@ -246,7 +246,7 @@ const MAX_REWARD_COUNT = 2_000_000_000;
 const MAX_REWARD_GROUPS = 100;
 const MAX_TEMPLATE_NAME_LENGTH = 30;
 const MAX_NOTICE_TEMPLATE_NAME_LENGTH = 100;
-const MAX_NOTICE_TITLE_LENGTH = 20;
+const MAX_NOTICE_TITLE_LENGTH = 100;
 
 function validateRewardRows(rewards: MailRewardItem[], items: ItemOption[]) {
   const normalized = rewards.map((reward) => ({ itemId: reward.itemId.trim(), count: reward.count.trim() }));
