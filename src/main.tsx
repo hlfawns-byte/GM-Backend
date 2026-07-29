@@ -4760,7 +4760,11 @@ function NoticePage({ postWithToken }: { postWithToken: (endpoint: string, body:
     }
     const templateContents = normalizeLanguageContents(selectedTemplate.contents, { title: selectedTemplate.title, body: selectedTemplate.body });
     const normalizedContents = fillMissingLanguageContents(templateContents, { title: selectedTemplate.title, body: selectedTemplate.body });
-    const primaryNoticeContent = normalizedContents[defaultMailLanguage].title.trim() && normalizedContents[defaultMailLanguage].body.trim() ? normalizedContents[defaultMailLanguage] : Object.values(normalizedContents).find((content) => content.title.trim() && content.body.trim()) ?? { title: "", body: "" };
+    const primaryNoticeContent = normalizedContents[defaultMailLanguage] ?? { title: "", body: "" };
+    if (!primaryNoticeContent.title.trim() || !primaryNoticeContent.body.trim()) {
+      setStatus("公告保存失败：公告模板至少需要填写一个英语标题和英语内容");
+      return;
+    }
     const conditionRows = form.conditions ?? [];
     const versionList = toVersionConditionArray(conditionRows);
     const platformList = conditionRows.filter((row) => row.field === "system").flatMap((row) => toPlatformNumberArray(row.value));
@@ -4802,6 +4806,7 @@ function NoticePage({ postWithToken }: { postWithToken: (endpoint: string, body:
     }
     const effectiveForm = {
       ...form,
+      noticeName: primaryNoticeContent.title.trim(),
       imagePath: form.imagePath.trim() || NOTICE_DEFAULT_IMAGE,
       typ: sidValues.length ? 1 : 0,
       sid: sidValues.join(","),
@@ -4840,7 +4845,7 @@ function NoticePage({ postWithToken }: { postWithToken: (endpoint: string, body:
     }
     const contents = normalizeLanguageContents(template.contents, { title: template.title, body: template.body });
     const primary = contents[defaultMailLanguage] ?? Object.values(contents).find((content) => content.title || content.body) ?? { title: "", body: "" };
-    setForm({ ...form, templateName: template.name, title: primary.title, body: primary.body, contents });
+    setForm({ ...form, noticeName: primary.title, templateName: template.name, title: primary.title, body: primary.body, contents });
   };
 
   const deleteNotice = async (slot: number) => {
@@ -4868,6 +4873,8 @@ function NoticePage({ postWithToken }: { postWithToken: (endpoint: string, body:
     { value: "server", label: "游戏内区服" },
   ];
   const noticeConditionRows = form.conditions ?? [];
+  const selectedNoticeTemplate = noticeTemplates.find((template) => template.name === form.templateName);
+  const noticeDisplayName = selectedNoticeTemplate ? templatePrimaryContent(selectedNoticeTemplate).title : form.noticeName ?? "";
 
   return (
     <section className="notice-page">
@@ -4876,19 +4883,21 @@ function NoticePage({ postWithToken }: { postWithToken: (endpoint: string, body:
       <div className="notice-grid">
         {[1, 2, 3].map((slot, index) => {
           const notice = notices.find((item) => Number(item.slot) === slot) ?? { slot, noticeName: "", title: "", body: "", imagePath: "" };
+          const noticeTemplate = findNoticeTemplate(notice);
+          const noticeCardName = noticeTemplate ? templatePrimaryContent(noticeTemplate).title : notice.noticeName;
           return (
             <article className={`notice-card ${palettes[index]}`} key={slot}>
               <button className="notice-delete-button" onClick={(event) => { event.stopPropagation(); void deleteNotice(slot); }} title={`删除公告 ${slot}`} type="button"><Trash2 size={14} />删除</button>
               <button className="notice-card-content" onClick={() => openEditor(notice)} type="button">
                 <span className="notice-watermark">admin</span>
                 <strong>公告 {slot}</strong>
-                <small className="notice-card-name">{notice.noticeName || "未填写公告名字"}</small>
+                <small className="notice-card-name">{noticeCardName || "未选择公告模板"}</small>
                 <h3>{notice.title || "暂无公告标题"}</h3>
                 <div className="notice-body-box">{notice.title || "暂无公告标题"}</div>
                 <label>配图路径</label>
                 <div className="notice-image-path">{notice.imagePath || "未配置配图路径"}</div>
                 <div className="tag-row">
-                  <small>模板名称：{findNoticeTemplate(notice)?.name || notice.templateName || "未选择"}</small>
+                  <small>模板名称：{noticeTemplate?.name || notice.templateName || "未选择"}</small>
                   <small>{Number(notice.typ) === 1 ? `服务器：${formatServerIdList(notice.sid) || "未填写"}` : "范围：全部服务器"}</small>
                   <small>注册开始：{formatBeijingTime(notice.regBegin || NOTICE_DEFAULT_REG_BEGIN)}</small>
                   <small>注册结束：{formatBeijingTime(notice.regEnd || NOTICE_DEFAULT_REG_END)}</small>
@@ -4907,8 +4916,8 @@ function NoticePage({ postWithToken }: { postWithToken: (endpoint: string, body:
             <header><strong>添加/修改公告</strong><button onClick={() => setEditing(null)} type="button">x</button></header>
             <div className="notice-form">
               <label>公告位置<select value={form.slot} onChange={(event) => switchNoticeSlot(Number(event.target.value))}><option value={1}>公告 1</option><option value={2}>公告 2</option><option value={3}>公告 3</option></select></label>
-              <label>公告名字<input maxLength={100} value={form.noticeName ?? ""} onChange={(event) => setForm({ ...form, noticeName: event.target.value })} placeholder="请输入公告名字" /></label>
               <label>公告模板<select value={noticeTemplates.find((template) => template.name === form.templateName)?.id ?? ""} onChange={(event) => applyNoticeTemplate(event.target.value)}><option value="">请选择公告模板</option>{noticeTemplates.map((template) => <option key={template.id} value={template.id}>{template.name}</option>)}</select></label>
+              <label>公告名字<input readOnly value={noticeDisplayName} placeholder="选择公告模板后自动显示英文标题" /></label>
               <label>配图路径<input value={form.imagePath} onChange={(event) => setForm({ ...form, imagePath: event.target.value })} placeholder={`默认：${NOTICE_DEFAULT_IMAGE}`} /></label>
               <div className="notice-condition-block">
                 <span>条件</span>
@@ -5063,9 +5072,8 @@ function configsToNoticePayload(configs: NoticeConfig[]) {
       const emptyLangList = languageDefinitions.map(({ id }) => ({ Language: id, Titel: " ", Body: " " }));
       if (slot === 1) {
         payload.LangLst = emptyLangList;
-      } else {
-        payload[`LangLst${slot}`] = emptyLangList;
       }
+      payload[`LangLst${slot}`] = emptyLangList;
       payload[`Rs${slot}`] = NOTICE_DEFAULT_IMAGE;
       payload[`Typ${slot}`] = 1;
       payload[`RegtBegin${slot}`] = 1;
@@ -5091,9 +5099,8 @@ function configsToNoticePayload(configs: NoticeConfig[]) {
     payload[`Body${suffix}`] = primary.body ?? "";
     if (slot === 1) {
       payload.LangLst = langList;
-    } else {
-      payload[`LangLst${slot}`] = langList;
     }
+    payload[`LangLst${slot}`] = langList;
     payload[`Rs${slot}`] = effectiveConfig.imagePath;
     const sid = toFlexibleNumberArray(effectiveConfig.sid);
     const isSpecifiedServer = Number(effectiveConfig.typ) === 1 && sid.length > 0;
