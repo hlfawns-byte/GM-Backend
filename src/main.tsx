@@ -40,6 +40,7 @@ type SectionKey =
   | "bindUid"
   | "gmState"
   | "silence"
+  | "userState"
   | "stateList"
   | "stateInfo"
   | "mailPersonal"
@@ -328,6 +329,7 @@ const navGroups = [
       { key: "bindUid", label: "绑定账号UID" },
       { key: "gmState", label: "封号/解封" },
       { key: "silence", label: "禁言/解禁" },
+      { key: "userState", label: "用户状态" },
       { key: "stateList", label: "名单清单" },
       { key: "stateInfo", label: "状态码列表" },
       { key: "rank", label: "排行榜查询" },
@@ -436,6 +438,7 @@ const modules: Record<SectionKey, ModuleConfig> = {
     actions: [{ key: "gmStateAdd", label: "提交名单状态", endpoint: "/gmStateAdd", fields: [field.userId, { key: "State", label: "状态", placeholder: "0/1/2/3/4", kind: "number" }], buildBody: (v) => ({ UserId: Number(v.UserId), State: Number(v.State) }) }],
   },
   silence: { title: "禁言/解禁", description: "禁言和解禁玩家聊天权限", icon: ShieldBan, status: "live", actions: [] },
+  userState: { title: "用户状态", description: "查询和批量修改用户名单状态", icon: ShieldCheck, status: "live", actions: [] },
   stateList: { title: "名单清单", description: "查看名单列表", icon: ShieldCheck, status: "live", actions: [{ key: "gmStateLst", label: "刷新名单", endpoint: "/gmStateLst", fields: [], buildBody: () => ({}) }] },
   stateInfo: { title: "状态码列表", description: "查看名单状态码说明", icon: Database, status: "live", actions: [{ key: "gmStateInfo", label: "读取状态码", endpoint: "/gmStateInfo", fields: [], buildBody: () => ({}) }] },
   mailPersonal: {
@@ -1519,7 +1522,7 @@ function App() {
             </section>
           )}
 
-          {active === "dashboard" ? <Dashboard results={results} accounts={accounts} /> : active === "playerInfo" ? <PlayerInfoPage postWithToken={postWithToken} /> : active === "bindUid" ? <BindUidPage postWithToken={postWithToken} /> : active === "gmState" ? <BanControlPage postWithToken={postWithToken} /> : active === "silence" ? <SilencePage operator={session.operatorAccount} /> : active.startsWith("mail") ? <MailSuitePage active={active as MailSectionKey} canUploadItemTable={auth.isAdmin} postWithToken={postWithToken} session={session} setActive={setActive} /> : active.startsWith("gift") ? <GiftSuitePage active={active as GiftSectionKey} canUploadItemTable={auth.isAdmin} postWithToken={postWithToken} session={session} /> : active === "notice" ? <NoticePage postWithToken={postWithToken} /> : active === "noticeTemplate" ? <NoticeTemplatePage /> : active === "sprint" ? <SprintActivityPage postWithToken={postWithToken} /> : active === "serverTime" ? <OpenServerPage postWithToken={postWithToken} /> : active === "orderRefund" ? <OrderRefundPage postWithToken={postWithToken} /> : moduleConfig.status === "pending" ? <UnavailablePanel module={moduleConfig} /> : (
+          {active === "dashboard" ? <Dashboard results={results} accounts={accounts} /> : active === "playerInfo" ? <PlayerInfoPage postWithToken={postWithToken} /> : active === "bindUid" ? <BindUidPage postWithToken={postWithToken} /> : active === "gmState" ? <BanControlPage postWithToken={postWithToken} /> : active === "silence" ? <SilencePage operator={session.operatorAccount} /> : active === "userState" ? <UserStatePage postWithToken={postWithToken} /> : active.startsWith("mail") ? <MailSuitePage active={active as MailSectionKey} canUploadItemTable={auth.isAdmin} postWithToken={postWithToken} session={session} setActive={setActive} /> : active.startsWith("gift") ? <GiftSuitePage active={active as GiftSectionKey} canUploadItemTable={auth.isAdmin} postWithToken={postWithToken} session={session} /> : active === "notice" ? <NoticePage postWithToken={postWithToken} /> : active === "noticeTemplate" ? <NoticeTemplatePage /> : active === "sprint" ? <SprintActivityPage postWithToken={postWithToken} /> : active === "serverTime" ? <OpenServerPage postWithToken={postWithToken} /> : active === "orderRefund" ? <OrderRefundPage postWithToken={postWithToken} /> : moduleConfig.status === "pending" ? <UnavailablePanel module={moduleConfig} /> : (
             <>
               <section className="filter-panel">
                 <div className="panel-heading">
@@ -2451,6 +2454,200 @@ function BanControlPage({ postWithToken }: { postWithToken: (endpoint: string, b
         </section>
       </div>
       {message && <div className="ban-status">{message}</div>}
+    </section>
+  );
+}
+
+type UserStateOption = {
+  id: number;
+  info: string;
+};
+
+type UserStateRow = {
+  userId: string;
+  state: number | null;
+  status: string;
+  raw: Record<string, unknown>;
+};
+
+function UserStatePage({ postWithToken }: { postWithToken: (endpoint: string, body: unknown) => Promise<ApiPostResponse> }) {
+  const clearOption: UserStateOption = { id: 0, info: "0 正常/解除状态" };
+  const [filterUserId, setFilterUserId] = React.useState("");
+  const [filterState, setFilterState] = React.useState("");
+  const [options, setOptions] = React.useState<UserStateOption[]>([clearOption]);
+  const [rows, setRows] = React.useState<UserStateRow[]>([]);
+  const [modalOpen, setModalOpen] = React.useState(false);
+  const [modalState, setModalState] = React.useState("");
+  const [modalUserIds, setModalUserIds] = React.useState("");
+  const [loading, setLoading] = React.useState(false);
+  const [saving, setSaving] = React.useState(false);
+  const [status, setStatus] = React.useState("");
+
+  const normalizeOptions = React.useCallback((payload: unknown) => {
+    const data = getApiData(payload);
+    const list = getArray(data?.Lst ?? data?.List);
+    const next = list
+      .map((item) => getObject(item))
+      .filter((item): item is Record<string, unknown> => Boolean(item))
+      .map((item) => {
+        const id = Number(objectValue(item, "Id", "ID", "id", "State", "state"));
+        const info = String(objectValue(item, "Info", "info", "Desc", "desc", "Name", "name") ?? "").trim();
+        return Number.isFinite(id) ? { id, info: info || String(id) } : null;
+      })
+      .filter((item): item is UserStateOption => Boolean(item));
+    const merged = [clearOption, ...next.filter((item) => item.id !== clearOption.id)];
+    setOptions(merged);
+    return merged;
+  }, []);
+
+  const normalizeRows = React.useCallback((payload: unknown, nextOptions: UserStateOption[]) => {
+    const data = getApiData(payload);
+    const list = getArray(data?.Lst ?? data?.List ?? data?.Rows ?? data?.Items);
+    const nextMap = new Map(nextOptions.map((option) => [option.id, option.info]));
+    const nextRows = list
+      .map((item) => getObject(item))
+      .filter((item): item is Record<string, unknown> => Boolean(item))
+      .map((item) => {
+        const userId = objectValue(item, "UserId", "UserID", "userId", "Uid", "UID", "uid");
+        const rawState = objectValue(item, "State", "state", "Id", "ID", "id");
+        const state = Number(rawState);
+        const stateValue = Number.isFinite(state) ? state : null;
+        const info = String(objectValue(item, "Info", "info", "Desc", "desc", "Status", "status") ?? "").trim();
+        return {
+          userId: userId === undefined ? "" : String(userId),
+          state: stateValue,
+          status: stateValue === null ? info || "暂无数据" : (nextMap.get(stateValue) ?? (info || String(stateValue))),
+          raw: item,
+        };
+      });
+    setRows(nextRows);
+  }, []);
+
+  const refreshAll = React.useCallback(async () => {
+    setLoading(true);
+    setStatus("");
+    try {
+      const optionResult = await postWithToken("/gmStateInfo", {});
+      const optionError = apiBusinessError(optionResult);
+      if (optionError) throw new Error(optionError);
+      const nextOptions = normalizeOptions(optionResult.payload);
+      const listResult = await postWithToken("/gmStateLst", {});
+      const listError = apiBusinessError(listResult);
+      if (listError) throw new Error(listError);
+      normalizeRows(listResult.payload, nextOptions);
+      setStatus("用户状态列表已刷新");
+    } catch (error) {
+      setStatus(error instanceof Error ? `读取失败：${error.message}` : "读取失败");
+    } finally {
+      setLoading(false);
+    }
+  }, [normalizeOptions, normalizeRows, postWithToken]);
+
+  React.useEffect(() => {
+    void refreshAll();
+  }, [refreshAll]);
+
+  const parseUserIds = (value: string) => Array.from(new Set(value
+    .split(/[\n,，\s]+/)
+    .map((item) => Number(item.trim()))
+    .filter((item) => Number.isInteger(item) && item > 0)));
+
+  const openCreate = () => {
+    setModalState("");
+    setModalUserIds("");
+    setModalOpen(true);
+    setStatus("");
+  };
+
+  const openEdit = (row: UserStateRow) => {
+    setModalState(row.state === null ? "" : String(row.state));
+    setModalUserIds(row.userId);
+    setModalOpen(true);
+    setStatus("");
+  };
+
+  const submitState = async () => {
+    const state = Number(modalState);
+    const ids = parseUserIds(modalUserIds);
+    if (!Number.isInteger(state)) {
+      setStatus("请选择用户状态");
+      return;
+    }
+    if (!ids.length) {
+      setStatus("请输入用户ID");
+      return;
+    }
+    setSaving(true);
+    setStatus("");
+    try {
+      const results = await Promise.all(ids.map((userId) => postWithToken("/gmStateAdd", { UserId: userId, State: state })));
+      const failed = results
+        .map((result, index) => ({ result, userId: ids[index] }))
+        .filter(({ result }) => !result.ok || result.status >= 400 || apiBusinessError(result));
+      if (failed.length === ids.length) {
+        const firstError = apiBusinessError(failed[0].result) || `HTTP ${failed[0].result.status}`;
+        throw new Error(firstError);
+      }
+      setModalOpen(false);
+      await refreshAll();
+      setStatus(failed.length ? `已提交 ${ids.length - failed.length} 个用户，${failed.length} 个失败` : `用户状态修改成功，共 ${ids.length} 个用户`);
+    } catch (error) {
+      setStatus(error instanceof Error ? `保存失败：${error.message}` : "保存失败");
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const filteredRows = rows.filter((row) => {
+    const userMatched = !filterUserId.trim() || row.userId.includes(filterUserId.trim());
+    const stateMatched = !filterState || String(row.state ?? "") === filterState;
+    return userMatched && stateMatched;
+  });
+
+  return (
+    <section className="mail-page user-state-page">
+      <section className="mail-filter-line user-state-filter">
+        <label>用户ID<input value={filterUserId} onChange={(event) => setFilterUserId(event.target.value)} placeholder="请输入用户ID" /></label>
+        <label>状态<select value={filterState} onChange={(event) => setFilterState(event.target.value)}><option value="">全部</option>{options.map((option) => <option key={option.id} value={option.id}>{option.info}</option>)}</select></label>
+        <button className="mail-secondary-button" onClick={() => { setFilterUserId(""); setFilterState(""); }} type="button">重置</button>
+        <button disabled={loading} onClick={() => void refreshAll()} type="button"><Search size={14} />{loading ? "查询中" : "查询"}</button>
+      </section>
+
+      <section className="mail-table-card user-state-card">
+        <div className="user-state-toolbar">
+          <strong>用户状态</strong>
+          <div>
+            <button className="mail-primary-button" onClick={openCreate} type="button"><Plus size={14} />新建</button>
+            <button className="mail-secondary-button" disabled={loading} onClick={() => void refreshAll()} type="button"><RefreshCw size={14} />刷新全部数据</button>
+          </div>
+        </div>
+        <PaginatedMailDataTable
+          columns={["用户ID", "状态", "操作"]}
+          rows={filteredRows.map((row) => ({
+            用户ID: row.userId || formatCell(objectValue(row.raw, "UserId", "Uid")),
+            状态: row.status,
+            操作: <div className="mail-action-buttons"><button onClick={() => openEdit(row)} type="button">修改</button></div>,
+          }))}
+        />
+      </section>
+
+      {modalOpen && (
+        <div className="modal-backdrop" role="presentation">
+          <section className="notice-modal user-state-modal" role="dialog" aria-modal="true">
+            <header><strong>{modalUserIds.trim() ? "修改用户状态" : "添加用户状态"}</strong><button onClick={() => setModalOpen(false)} type="button"><X size={16} /></button></header>
+            <div className="notice-form user-state-form">
+              <label>用户状态<select value={modalState} onChange={(event) => setModalState(event.target.value)}><option value="">请选择用户状态</option>{options.map((option) => <option key={option.id} value={option.id}>{option.info}</option>)}</select></label>
+              <label>用户ID(支持批量，每行一个)<textarea value={modalUserIds} onChange={(event) => setModalUserIds(event.target.value)} placeholder="请输入用户ID，每行一个" /></label>
+              {status && <div className={`mail-form-error ${status.includes("成功") || status.includes("已提交") ? "success" : ""}`}>{status}</div>}
+              <div className="mail-form-actions">
+                <button disabled={saving} onClick={() => setModalOpen(false)} type="button">取消</button>
+                <button disabled={saving} onClick={() => void submitState()} type="button">{saving ? "保存中..." : "确定"}</button>
+              </div>
+            </div>
+          </section>
+        </div>
+      )}
+      {!modalOpen && <TransientToast kind={status.includes("失败") || status.includes("请选择") || status.includes("请输入") ? "error" : "success"} message={status} onClose={() => setStatus("")} />}
     </section>
   );
 }
@@ -4649,6 +4846,14 @@ function noticeRegistrationBounds(rows: ConditionRow[]) {
   };
 }
 
+function normalizeNoticeImagePath(value?: string) {
+  const text = String(value ?? "").trim();
+  if (!text) return NOTICE_DEFAULT_IMAGE;
+  if (/^notice_bg_\d+$/i.test(text)) return text;
+  if (/^(?:\/?notice\/)?[^\s"'<>]+\.(?:png|jpe?g|webp|gif)$/i.test(text)) return text;
+  return NOTICE_DEFAULT_IMAGE;
+}
+
 function NoticePage({ postWithToken }: { postWithToken: (endpoint: string, body: unknown) => Promise<ApiPostResponse> }) {
   const [notices, setNotices] = React.useState<NoticeConfig[]>([]);
   const [serverOptions, setServerOptions] = React.useState<ServerOption[]>([]);
@@ -4822,7 +5027,7 @@ function NoticePage({ postWithToken }: { postWithToken: (endpoint: string, body:
     const effectiveForm = {
       ...form,
       noticeName: primaryNoticeContent.title.trim(),
-      imagePath: form.imagePath.trim() || NOTICE_DEFAULT_IMAGE,
+      imagePath: normalizeNoticeImagePath(form.imagePath),
       typ: sidValues.length ? 1 : 0,
       sid: sidValues.join(","),
       regBegin: secondsToDatetimeLocal(regBounds.begin),
@@ -4834,7 +5039,10 @@ function NoticePage({ postWithToken }: { postWithToken: (endpoint: string, body:
     const normalizedForm = normalizeNotice({ ...effectiveForm, title: primaryNoticeContent.title, body: primaryNoticeContent.body, contents: normalizedContents }, Number(effectiveForm.slot) || 1);
     setSaving(true);
     try {
-      const merged = [1, 2, 3].map((slot) => normalizeNotice(slot === normalizedForm.slot ? normalizedForm : noticeDrafts.find((notice) => Number(notice.slot) === slot) ?? notices.find((notice) => Number(notice.slot) === slot) ?? emptyNotice(slot), slot));
+      const merged = [1, 2, 3].map((slot) => {
+        const notice = normalizeNotice(slot === normalizedForm.slot ? normalizedForm : noticeDrafts.find((item) => Number(item.slot) === slot) ?? notices.find((item) => Number(item.slot) === slot) ?? emptyNotice(slot), slot);
+        return { ...notice, imagePath: normalizeNoticeImagePath(notice.imagePath) };
+      });
       const result = await postWithToken("/gmNoticeAdd", configsToNoticePayload(merged));
       const error = apiBusinessError(result, "notice");
       if (error) {
@@ -4866,7 +5074,10 @@ function NoticePage({ postWithToken }: { postWithToken: (endpoint: string, body:
   const deleteNotice = async (slot: number) => {
     if (!window.confirm(`确认删除公告 ${slot}？`)) return;
     try {
-      const merged = [1, 2, 3].map((itemSlot) => normalizeNotice(itemSlot === slot ? emptyNotice(itemSlot) : notices.find((notice) => Number(notice.slot) === itemSlot) ?? emptyNotice(itemSlot), itemSlot));
+      const merged = [1, 2, 3].map((itemSlot) => {
+        const notice = normalizeNotice(itemSlot === slot ? emptyNotice(itemSlot) : notices.find((item) => Number(item.slot) === itemSlot) ?? emptyNotice(itemSlot), itemSlot);
+        return { ...notice, imagePath: normalizeNoticeImagePath(notice.imagePath) };
+      });
       const result = await postWithToken("/gmNoticeAdd", configsToNoticePayload(merged));
       const error = apiBusinessError(result, "notice");
       if (error) {
@@ -5100,7 +5311,7 @@ function configsToNoticePayload(configs: NoticeConfig[]) {
     }
     const effectiveConfig = {
       ...config,
-      imagePath: config.imagePath?.trim() || NOTICE_DEFAULT_IMAGE,
+      imagePath: normalizeNoticeImagePath(config.imagePath),
       platforms: config.platforms || "1,2",
       versions: config.versions || "",
     };

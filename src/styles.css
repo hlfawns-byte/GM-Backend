@@ -2060,6 +2060,16 @@ tbody tr:hover,
   border-radius: 3px;
 }
 
+.mail-filter-line select {
+  width: 260px;
+  height: 34px;
+  border: 1px solid #d7e0ec;
+  border-radius: 3px;
+  padding: 0 10px;
+  color: #334155;
+  background: #fff;
+}
+
 .mail-filter-line button,
 .mail-primary-button,
 .mail-secondary-button,
@@ -2080,6 +2090,52 @@ tbody tr:hover,
 
 .mail-table-card {
   padding: 20px 20px 24px;
+}
+
+.user-state-toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  margin-bottom: 14px;
+}
+
+.user-state-toolbar strong {
+  color: #2d3a4b;
+  font-size: 15px;
+}
+
+.user-state-toolbar > div {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.user-state-modal {
+  width: min(560px, calc(100vw - 64px));
+}
+
+.user-state-form textarea {
+  min-height: 180px;
+  resize: vertical;
+}
+
+.user-state-form .mail-form-actions button:first-child {
+  border-color: #d9e0e9;
+  color: #667388;
+  background: #fff;
+}
+
+.user-state-form .mail-form-actions button:last-child {
+  border-color: #2f8fea;
+  color: #fff;
+  background: #2f8fea;
+}
+
+.mail-form-error.success {
+  border-color: #c7ead8;
+  color: #147846;
+  background: #f0fbf5;
 }
 
 .table-pagination {
