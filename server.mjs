@@ -503,6 +503,7 @@ async function handleLocalApi(req, res, pathname) {
     const slot = Math.min(3, Math.max(1, Number(body.slot) || 1));
     const next = {
       slot,
+      noticeName: String(body.noticeName ?? ""),
       templateName: String(body.templateName ?? ""),
       title: String(body.title ?? ""),
       body: String(body.body ?? ""),
@@ -566,8 +567,8 @@ async function handleLocalApi(req, res, pathname) {
     const id = String(body.id ?? `nt-${Date.now()}`);
     const templateList = Array.isArray(templates) ? templates : [];
     const rawName = String(body.name ?? "").trim();
-    if (rawName.length > 20) {
-      sendJson(res, 400, { error: "公告模板名称最多20个字符" });
+    if (rawName.length > 100) {
+      sendJson(res, 400, { error: "公告模板名称最多100个字符" });
       return true;
     }
     const rawContents = body.contents && typeof body.contents === "object" ? body.contents : {};
@@ -576,7 +577,7 @@ async function handleLocalApi(req, res, pathname) {
       sendJson(res, 400, { error: overlongTitle ? `${overlongTitle[0]}公告标题最多20个字符` : "公告标题最多20个字符" });
       return true;
     }
-    const name = String(body.name ?? "未命名模板").trim().slice(0, 30);
+    const name = (rawName || "未命名模板").slice(0, 100);
     if (templateList.some((template) => String(template.id) !== id && String(template.name ?? "").trim().toLocaleLowerCase() === name.toLocaleLowerCase())) {
       sendJson(res, 409, { error: "模板名称已存在，请更换名称" });
       return true;

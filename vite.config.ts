@@ -609,6 +609,7 @@ function localAccountPlugin() {
           const slot = Math.min(3, Math.max(1, Number(body.slot) || 1));
           const next = {
             slot,
+            noticeName: String(body.noticeName ?? ""),
             templateName: String(body.templateName ?? ""),
             title: String(body.title ?? ""),
             body: String(body.body ?? ""),
@@ -685,8 +686,8 @@ function localAccountPlugin() {
           const now = Math.floor(Date.now() / 1000);
           const id = String(body.id ?? `nt-${Date.now()}`);
           const rawName = String(body.name ?? "").trim();
-          if (rawName.length > 20) {
-            sendJson(res, 400, { error: "公告模板名称最多20个字符" });
+          if (rawName.length > 100) {
+            sendJson(res, 400, { error: "公告模板名称最多100个字符" });
             return;
           }
           const rawContents = body.contents && typeof body.contents === "object" ? body.contents as Record<string, unknown> : {};
@@ -695,7 +696,7 @@ function localAccountPlugin() {
             sendJson(res, 400, { error: overlongTitle ? `${overlongTitle[0]}公告标题最多20个字符` : "公告标题最多20个字符" });
             return;
           }
-          const name = (rawName || "未命名模板").slice(0, 20);
+          const name = (rawName || "未命名模板").slice(0, 100);
           if (templates.some((template) => String(template.id) !== id && String(template.name ?? "").trim().toLocaleLowerCase() === name.toLocaleLowerCase())) {
             sendJson(res, 409, { error: "模板名称已存在，请换个名称" });
             return;

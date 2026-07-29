@@ -204,6 +204,7 @@ type UserLog = {
 
 type NoticeConfig = {
   slot: number;
+  noticeName?: string;
   templateName?: string;
   title: string;
   body: string;
@@ -244,7 +245,7 @@ type GiftCodeConfig = {
 const MAX_REWARD_COUNT = 2_000_000_000;
 const MAX_REWARD_GROUPS = 100;
 const MAX_TEMPLATE_NAME_LENGTH = 30;
-const MAX_NOTICE_TEMPLATE_NAME_LENGTH = 20;
+const MAX_NOTICE_TEMPLATE_NAME_LENGTH = 100;
 const MAX_NOTICE_TITLE_LENGTH = 20;
 
 function validateRewardRows(rewards: MailRewardItem[], items: ItemOption[]) {
@@ -4638,14 +4639,15 @@ function NoticePage({ postWithToken }: { postWithToken: (endpoint: string, body:
   const [serverOptions, setServerOptions] = React.useState<ServerOption[]>([]);
   const [noticeTemplates, setNoticeTemplates] = React.useState<MailTemplate[]>([]);
   const [editing, setEditing] = React.useState<NoticeConfig | null>(null);
-  const [form, setForm] = React.useState<NoticeConfig>({ slot: 1, templateName: "", title: "", body: "", contents: emptyLanguageContents(), imagePath: "", typ: 0, sid: "", regBegin: "", regEnd: "", platforms: "", versions: "", conditions: [] });
+  const [form, setForm] = React.useState<NoticeConfig>({ slot: 1, noticeName: "", templateName: "", title: "", body: "", contents: emptyLanguageContents(), imagePath: "", typ: 0, sid: "", regBegin: "", regEnd: "", platforms: "", versions: "", conditions: [] });
   const [noticeDrafts, setNoticeDrafts] = React.useState<NoticeConfig[]>([]);
   const [saving, setSaving] = React.useState(false);
   const [status, setStatus] = React.useState("");
   const palettes = ["blue", "green", "orange"];
-  const emptyNotice = (slot: number): NoticeConfig => ({ slot, templateName: "", title: "", body: "", contents: emptyLanguageContents(), imagePath: "", typ: 0, sid: "", regBegin: "", regEnd: "", platforms: "", versions: "", conditions: [] });
+  const emptyNotice = (slot: number): NoticeConfig => ({ slot, noticeName: "", templateName: "", title: "", body: "", contents: emptyLanguageContents(), imagePath: "", typ: 0, sid: "", regBegin: "", regEnd: "", platforms: "", versions: "", conditions: [] });
   const normalizeNotice = (notice: Partial<NoticeConfig>, slot = Number(notice.slot) || 1): NoticeConfig => ({
     slot,
+    noticeName: notice.noticeName ?? "",
     templateName: notice.templateName ?? "",
     title: notice.title ?? "",
     body: notice.body ?? "",
@@ -4695,8 +4697,8 @@ function NoticePage({ postWithToken }: { postWithToken: (endpoint: string, body:
     setNotices(noticePayloadToConfigs(getApiData(result.payload)).map((notice) => {
       const localNotice = localBySlot.get(Number(notice.slot));
       const hasNoticeContent = Boolean(notice.title.trim() || notice.body.trim() || Object.values(notice.contents ?? {}).some((content) => content.title.trim() || content.body.trim()));
-      if (!hasNoticeContent || !localNotice?.templateName) return notice;
-      return { ...notice, templateName: localNotice.templateName };
+      if (!hasNoticeContent) return notice;
+      return { ...notice, noticeName: localNotice?.noticeName ?? notice.noticeName, templateName: localNotice?.templateName ?? notice.templateName };
     }));
   }, [postWithToken]);
 
@@ -4873,13 +4875,14 @@ function NoticePage({ postWithToken }: { postWithToken: (endpoint: string, body:
       <button className="notice-edit-button" onClick={() => openEditor()} type="button"><Bell size={15} />添加/修改公告</button>
       <div className="notice-grid">
         {[1, 2, 3].map((slot, index) => {
-          const notice = notices.find((item) => Number(item.slot) === slot) ?? { slot, title: "", body: "", imagePath: "" };
+          const notice = notices.find((item) => Number(item.slot) === slot) ?? { slot, noticeName: "", title: "", body: "", imagePath: "" };
           return (
             <article className={`notice-card ${palettes[index]}`} key={slot}>
               <button className="notice-delete-button" onClick={(event) => { event.stopPropagation(); void deleteNotice(slot); }} title={`删除公告 ${slot}`} type="button"><Trash2 size={14} />删除</button>
               <button className="notice-card-content" onClick={() => openEditor(notice)} type="button">
                 <span className="notice-watermark">admin</span>
                 <strong>公告 {slot}</strong>
+                <small className="notice-card-name">{notice.noticeName || "未填写公告名字"}</small>
                 <h3>{notice.title || "暂无公告标题"}</h3>
                 <div className="notice-body-box">{notice.title || "暂无公告标题"}</div>
                 <label>配图路径</label>
@@ -4904,6 +4907,7 @@ function NoticePage({ postWithToken }: { postWithToken: (endpoint: string, body:
             <header><strong>添加/修改公告</strong><button onClick={() => setEditing(null)} type="button">x</button></header>
             <div className="notice-form">
               <label>公告位置<select value={form.slot} onChange={(event) => switchNoticeSlot(Number(event.target.value))}><option value={1}>公告 1</option><option value={2}>公告 2</option><option value={3}>公告 3</option></select></label>
+              <label>公告名字<input maxLength={100} value={form.noticeName ?? ""} onChange={(event) => setForm({ ...form, noticeName: event.target.value })} placeholder="请输入公告名字" /></label>
               <label>公告模板<select value={noticeTemplates.find((template) => template.name === form.templateName)?.id ?? ""} onChange={(event) => applyNoticeTemplate(event.target.value)}><option value="">请选择公告模板</option>{noticeTemplates.map((template) => <option key={template.id} value={template.id}>{template.name}</option>)}</select></label>
               <label>配图路径<input value={form.imagePath} onChange={(event) => setForm({ ...form, imagePath: event.target.value })} placeholder={`默认：${NOTICE_DEFAULT_IMAGE}`} /></label>
               <div className="notice-condition-block">
@@ -4970,6 +4974,7 @@ function noticePayloadToConfigs(data: Record<string, unknown> | null): NoticeCon
     if (!title.trim() && !body.trim()) {
       return {
         slot,
+        noticeName: "",
         templateName: "",
         title: "",
         body: "",
@@ -4996,6 +5001,7 @@ function noticePayloadToConfigs(data: Record<string, unknown> | null): NoticeCon
     const versionText = versionValues.length && !usesAllVersions ? formatVersionConditionList(versionValues).join(",") : "";
     const config = {
       slot,
+      noticeName: String(data?.[`NoticeName${slot}`] ?? data?.[`Name${slot}`] ?? ""),
       templateName: String(data?.[`TemplateName${slot}`] ?? data?.[`NoticeTemplate${slot}`] ?? ""),
       title,
       body,
@@ -5054,8 +5060,12 @@ function configsToNoticePayload(configs: NoticeConfig[]) {
       // servers reject an empty title, so clear a slot with an unreachable row.
       payload[`Titel${suffix}`] = " ";
       payload[`Body${suffix}`] = " ";
-      payload[`LangLst${slot}`] = languageDefinitions.map(({ id }) => ({ Language: id, Titel: " ", Body: " " }));
-      if (slot === 1) payload.LangLst = payload[`LangLst${slot}`];
+      const emptyLangList = languageDefinitions.map(({ id }) => ({ Language: id, Titel: " ", Body: " " }));
+      if (slot === 1) {
+        payload.LangLst = emptyLangList;
+      } else {
+        payload[`LangLst${slot}`] = emptyLangList;
+      }
       payload[`Rs${slot}`] = NOTICE_DEFAULT_IMAGE;
       payload[`Typ${slot}`] = 1;
       payload[`RegtBegin${slot}`] = 1;
@@ -5079,8 +5089,11 @@ function configsToNoticePayload(configs: NoticeConfig[]) {
     const langList = noticeLangListPayload(contents);
     payload[`Titel${suffix}`] = primary.title ?? "";
     payload[`Body${suffix}`] = primary.body ?? "";
-    payload[`LangLst${slot}`] = langList;
-    if (slot === 1) payload.LangLst = langList;
+    if (slot === 1) {
+      payload.LangLst = langList;
+    } else {
+      payload[`LangLst${slot}`] = langList;
+    }
     payload[`Rs${slot}`] = effectiveConfig.imagePath;
     const sid = toFlexibleNumberArray(effectiveConfig.sid);
     const isSpecifiedServer = Number(effectiveConfig.typ) === 1 && sid.length > 0;

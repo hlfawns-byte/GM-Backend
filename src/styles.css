@@ -1521,6 +1521,15 @@ tbody tr:hover,
   font-size: 18px;
 }
 
+.notice-card-name {
+  overflow: hidden;
+  color: #64748b;
+  font-size: 13px;
+  font-weight: 700;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .notice-card h3 {
   margin: 0;
   font-size: 25px;
