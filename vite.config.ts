@@ -86,6 +86,24 @@ const mailGroupsFile = path.resolve(`data/${portal}/mail-groups.json`);
 const userLogsFile = path.resolve(`data/${portal}/user-logs.json`);
 const noticesFile = path.resolve(`data/${portal}/notices.json`);
 
+function sanitizeScopePart(value: unknown) {
+  return String(value || "default").trim().replace(/[\\/:*?"<>|\s]+/g, "_").replace(/^_+|_+$/g, "") || "default";
+}
+
+function itemScopeFromUrl(requestUrl: string) {
+  const request = new URL(requestUrl || "/", "http://localhost");
+  const game = sanitizeScopePart(request.searchParams.get("game"));
+  const serverName = sanitizeScopePart(request.searchParams.get("serverName"));
+  return `${game}__${serverName}`;
+}
+
+function itemFilesForScope(scope: string) {
+  return {
+    items: path.resolve(`data/${portal}/items/${scope}.json`),
+    upload: path.resolve(`data/${portal}/uploads/items/${scope}.xlsx`),
+  };
+}
+
 function gameServerDisplayName(id: number) {
   return id <= 123 ? `GL-${id}` : `TK-${id - 123}`;
 }
@@ -225,7 +243,12 @@ function parseItemWorkbook(file: string): ItemRecord[] {
   return Array.isArray(parsed) ? parsed : [];
 }
 
-function readItems(): ItemRecord[] {
+function readItems(scope?: string): ItemRecord[] {
+  if (scope) {
+    const scopedFiles = itemFilesForScope(scope);
+    const scoped = readJsonFile<ItemRecord[]>(scopedFiles.items, []);
+    if (scoped.length) return scoped;
+  }
   const current = readJsonFile<ItemRecord[]>(itemsFile, []);
   if (current.length) return current;
   if (fs.existsSync(defaultItemTable)) {
@@ -562,8 +585,8 @@ function localAccountPlugin() {
           return;
         }
 
-        if (url === "/local-api/items" && req.method === "GET") {
-          sendJson(res, 200, { items: readItems() });
+        if (pathname === "/local-api/items" && req.method === "GET") {
+          sendJson(res, 200, { items: readItems(itemScopeFromUrl(req.url ?? "")) });
           return;
         }
 
@@ -605,7 +628,7 @@ function localAccountPlugin() {
           return;
         }
 
-        if (url === "/local-api/items/upload" && req.method === "POST") {
+        if (pathname === "/local-api/items/upload" && req.method === "POST") {
           try {
             const buffer = await readBufferBody(req);
             const uploaded = extractMultipartFile(buffer, String(req.headers["content-type"] ?? ""));
@@ -613,10 +636,11 @@ function localAccountPlugin() {
               sendJson(res, 400, { error: "没有读取到上传文件" });
               return;
             }
-            fs.mkdirSync(path.dirname(itemUploadFile), { recursive: true });
-            fs.writeFileSync(itemUploadFile, uploaded.data);
-            const items = parseItemWorkbook(itemUploadFile);
-            writeJsonFile(itemsFile, items);
+            const scopedFiles = itemFilesForScope(itemScopeFromUrl(req.url ?? ""));
+            fs.mkdirSync(path.dirname(scopedFiles.upload), { recursive: true });
+            fs.writeFileSync(scopedFiles.upload, uploaded.data);
+            const items = parseItemWorkbook(scopedFiles.upload);
+            writeJsonFile(scopedFiles.items, items);
             sendJson(res, 200, { filename: uploaded.filename, items });
           } catch (error) {
             sendJson(res, 400, { error: error instanceof Error ? error.message : "解析道具表失败" });

@@ -721,6 +721,10 @@ function stringFromCell(value: unknown) {
   return String(value ?? "").trim();
 }
 
+function rawStringFromCell(value: unknown) {
+  return String(value ?? "");
+}
+
 function matchLanguage(value: unknown) {
   const text = stringFromCell(value).toLowerCase();
   if (!text) return undefined;
@@ -759,12 +763,12 @@ function languageContentList(contents?: Record<string, MailTemplateContent>) {
 function fillMissingLanguageContents(contents?: Record<string, MailTemplateContent>, fallback?: MailTemplateContent) {
   const normalized = normalizeLanguageContents(contents, fallback);
   const defaultContent = normalized[defaultMailLanguage];
-  const fallbackContent = defaultContent.title && defaultContent.body ? defaultContent : Object.values(normalized).find((content) => content.title && content.body) ?? { title: fallback?.title ?? "", body: fallback?.body ?? "" };
+  const fallbackContent = defaultContent.title.trim() && defaultContent.body.trim() ? defaultContent : Object.values(normalized).find((content) => content.title.trim() && content.body.trim()) ?? { title: fallback?.title ?? "", body: fallback?.body ?? "" };
   return Object.fromEntries(languageDefinitions.map((language) => {
     const content = normalized[language.label] ?? { title: "", body: "" };
     return [language.label, {
-      title: content.title.trim() || fallbackContent.title,
-      body: content.body.trim() || fallbackContent.body,
+      title: content.title.trim() ? content.title : fallbackContent.title,
+      body: content.body.trim() ? content.body : fallbackContent.body,
     }];
   })) as Record<string, MailTemplateContent>;
 }
@@ -815,10 +819,10 @@ async function parseMailTemplateFile(file: File) {
     .filter((item): item is { language: string; index: number } => Boolean(item.language));
   if (threeRowLanguageMatches.length >= 2 && (stringFromCell(threeRowTitles[0]).toLowerCase() === "title" || stringFromCell(threeRowBodies[0]).toLowerCase() === "desc")) {
     for (const item of threeRowLanguageMatches) {
-      contents[item.language] = { title: stringFromCell(threeRowTitles[item.index]), body: stringFromCell(threeRowBodies[item.index]) };
+      contents[item.language] = { title: rawStringFromCell(threeRowTitles[item.index]), body: rawStringFromCell(threeRowBodies[item.index]) };
     }
-    if (!Object.values(contents).some((content) => content.title || content.body)) throw new Error("模板文件没有邮件标题或邮件内容");
-    const primary = contents[defaultMailLanguage].title || contents[defaultMailLanguage].body ? contents[defaultMailLanguage] : Object.values(contents).find((content) => content.title || content.body) ?? { title: "", body: "" };
+    if (!Object.values(contents).some((content) => content.title.trim() || content.body.trim())) throw new Error("模板文件没有邮件标题或邮件内容");
+    const primary = contents[defaultMailLanguage].title.trim() || contents[defaultMailLanguage].body.trim() ? contents[defaultMailLanguage] : Object.values(contents).find((content) => content.title.trim() || content.body.trim()) ?? { title: "", body: "" };
     return { name: "", title: primary.title, body: primary.body, contents };
   }
   const headerIndex = usefulRows.findIndex((row) => row.some((cell) => /标题|title/i.test(stringFromCell(cell))) && row.some((cell) => /内容|body|content/i.test(stringFromCell(cell))));
@@ -836,7 +840,7 @@ async function parseMailTemplateFile(file: File) {
     for (const item of dataRows) {
       const language = matchLanguage(item[languageColumn])?.label;
       if (!language) continue;
-      contents[language] = { title: stringFromCell(item[titleColumn]), body: stringFromCell(item[bodyColumn]) };
+      contents[language] = { title: rawStringFromCell(item[titleColumn]), body: rawStringFromCell(item[bodyColumn]) };
     }
   } else {
     for (const language of mailLanguages) {
@@ -844,16 +848,16 @@ async function parseMailTemplateFile(file: File) {
       const bodyIndex = headers.findIndex((header) => header.includes(language) && /内容|body|content/i.test(header));
       if (titleIndex >= 0 || bodyIndex >= 0) {
         const first = dataRows[0] ?? [];
-        contents[language] = { title: titleIndex >= 0 ? stringFromCell(first[titleIndex]) : "", body: bodyIndex >= 0 ? stringFromCell(first[bodyIndex]) : "" };
+        contents[language] = { title: titleIndex >= 0 ? rawStringFromCell(first[titleIndex]) : "", body: bodyIndex >= 0 ? rawStringFromCell(first[bodyIndex]) : "" };
       }
     }
   }
   const row = dataRows.find((item) => stringFromCell(item[titleColumn]) || stringFromCell(item[bodyColumn]));
   if (row) {
-    contents[defaultMailLanguage] = { title: stringFromCell(row[titleColumn]), body: stringFromCell(row[bodyColumn]) };
+    contents[defaultMailLanguage] = { title: rawStringFromCell(row[titleColumn]), body: rawStringFromCell(row[bodyColumn]) };
   }
-  if (!Object.values(contents).some((content) => content.title || content.body)) throw new Error("模板文件没有邮件标题或邮件内容");
-  const primary = contents[defaultMailLanguage].title || contents[defaultMailLanguage].body ? contents[defaultMailLanguage] : Object.values(contents).find((content) => content.title || content.body) ?? { title: "", body: "" };
+  if (!Object.values(contents).some((content) => content.title.trim() || content.body.trim())) throw new Error("模板文件没有邮件标题或邮件内容");
+  const primary = contents[defaultMailLanguage].title.trim() || contents[defaultMailLanguage].body.trim() ? contents[defaultMailLanguage] : Object.values(contents).find((content) => content.title.trim() || content.body.trim()) ?? { title: "", body: "" };
   return {
     name: nameColumn >= 0 && row ? stringFromCell(row[nameColumn]) : "",
     title: primary.title,
@@ -1150,6 +1154,10 @@ function apiBaseFromServerUrl(url: string) {
   const normalized = url.trim();
   if (!normalized || normalized.startsWith("http")) return "/gm-api";
   return normalized.replace(/\/$/, "");
+}
+
+function itemScopeQuery(session: Pick<Session, "game" | "serverName">) {
+  return `game=${encodeURIComponent(session.game)}&serverName=${encodeURIComponent(session.serverName)}`;
 }
 
 const storageKey = `touka-gm-session-${portal}`;
@@ -1502,7 +1510,7 @@ function App() {
             </section>
           )}
 
-          {active === "dashboard" ? <Dashboard results={results} accounts={accounts} /> : active === "playerInfo" ? <PlayerInfoPage postWithToken={postWithToken} /> : active === "bindUid" ? <BindUidPage postWithToken={postWithToken} /> : active === "gmState" ? <BanControlPage postWithToken={postWithToken} /> : active === "silence" ? <SilencePage operator={session.operatorAccount} /> : active.startsWith("mail") ? <MailSuitePage active={active as MailSectionKey} canUploadItemTable={auth.isAdmin} postWithToken={postWithToken} session={session} setActive={setActive} /> : active.startsWith("gift") ? <GiftSuitePage active={active as GiftSectionKey} canUploadItemTable={auth.isAdmin} postWithToken={postWithToken} /> : active === "notice" ? <NoticePage postWithToken={postWithToken} /> : active === "noticeTemplate" ? <NoticeTemplatePage /> : active === "sprint" ? <SprintActivityPage postWithToken={postWithToken} /> : active === "serverTime" ? <OpenServerPage postWithToken={postWithToken} /> : active === "orderRefund" ? <OrderRefundPage postWithToken={postWithToken} /> : moduleConfig.status === "pending" ? <UnavailablePanel module={moduleConfig} /> : (
+          {active === "dashboard" ? <Dashboard results={results} accounts={accounts} /> : active === "playerInfo" ? <PlayerInfoPage postWithToken={postWithToken} /> : active === "bindUid" ? <BindUidPage postWithToken={postWithToken} /> : active === "gmState" ? <BanControlPage postWithToken={postWithToken} /> : active === "silence" ? <SilencePage operator={session.operatorAccount} /> : active.startsWith("mail") ? <MailSuitePage active={active as MailSectionKey} canUploadItemTable={auth.isAdmin} postWithToken={postWithToken} session={session} setActive={setActive} /> : active.startsWith("gift") ? <GiftSuitePage active={active as GiftSectionKey} canUploadItemTable={auth.isAdmin} postWithToken={postWithToken} session={session} /> : active === "notice" ? <NoticePage postWithToken={postWithToken} /> : active === "noticeTemplate" ? <NoticeTemplatePage /> : active === "sprint" ? <SprintActivityPage postWithToken={postWithToken} /> : active === "serverTime" ? <OpenServerPage postWithToken={postWithToken} /> : active === "orderRefund" ? <OrderRefundPage postWithToken={postWithToken} /> : moduleConfig.status === "pending" ? <UnavailablePanel module={moduleConfig} /> : (
             <>
               <section className="filter-panel">
                 <div className="panel-heading">
@@ -2818,7 +2826,7 @@ function MailSuitePage({ active, canUploadItemTable, postWithToken, session, set
 
   const refreshLocalMailData = React.useCallback(async () => {
     const [itemResponse, templateResponse, rewardResponse, serverResponse, scheduledResponse, groupResponse] = await Promise.all([
-      fetch("/local-api/items"),
+      fetch(`/local-api/items?${itemScopeQuery(session)}`),
       fetch("/local-api/mail-templates"),
       fetch("/local-api/reward-templates"),
       fetch("/local-api/game-servers"),
@@ -2836,7 +2844,7 @@ function MailSuitePage({ active, canUploadItemTable, postWithToken, session, set
     setRewardTemplates(rewardPayload.templates ?? []);
     setServerOptions(serverPayload.servers ?? []);
     setLocalMailRows([...(groupPayload.groups ?? []), ...(scheduledPayload.mails ?? [])]);
-  }, [session.serverUrl]);
+  }, [session.game, session.serverName, session.serverUrl]);
 
   const persistMailGroup = async (group: Record<string, unknown>) => {
     await fetch("/local-api/mail-groups", {
@@ -2991,7 +2999,7 @@ function MailSuitePage({ active, canUploadItemTable, postWithToken, session, set
   const uploadItemTable = async (file: File) => {
     const formData = new FormData();
     formData.append("file", file);
-    const response = await fetch("/local-api/items/upload", { method: "POST", body: formData });
+    const response = await fetch(`/local-api/items/upload?${itemScopeQuery(session)}`, { method: "POST", body: formData });
     const payload = (await response.json().catch(() => ({}))) as { items?: ItemOption[]; error?: string };
     if (!response.ok) throw new Error(payload.error || "上传道具表失败");
     setItems(payload.items ?? []);
@@ -3397,7 +3405,7 @@ function MailListPage({ active, claimLoading, claimRows, localMailRows, mailRows
     if (!userIdQuery.trim()) return true;
     return formatCell(row.TargetID).includes(userIdQuery.trim());
   }).sort(compareMailRowsNewestFirst);
-  const listColumns = ["ID", "邮件名称", "目标", "状态", "时间", "操作"];
+  const listColumns = global ? ["ID", "邮件名称", "目标", "状态", "时间", "操作"] : ["ID", "邮件名称", "目标", "是否查看", "是否领取", "时间", "操作"];
 
   if (global && recordTab === "claim") {
     return (
@@ -3459,6 +3467,8 @@ function MailListPage({ active, claimLoading, claimRows, localMailRows, mailRows
               邮件名称: title,
               目标: <MailTargetSummary row={row} serverOptions={serverOptions} />,
               状态: statusText,
+              是否查看: mailRowViewed(row) ? "已查看" : "未查看",
+              是否领取: mailRowClaimed(row) ? "已领取" : "未领取",
               时间: <span className="mail-time-cell"><span>注册开始: {formatMailListTime(row.RegtBegin, "2020-01-01 00:00")}</span><span>注册结束: {formatMailListTime(regEnd, regEndFallback)}</span><span>生效时间: {formatMailListTime(row.St, "立即生效")}</span><span>过期时间: {formatMailListTime(row.Et, "2050-12-31 23:59")}</span><span>创建时间: {formatMailListTime(rawCreatedAt, createdAtFallback)}</span></span>,
               操作: <div className="mail-action-buttons"><button onClick={() => void onEdit(row)} type="button">编辑</button><button onClick={() => void onDelete(id)} type="button">撤回</button></div>,
             };
@@ -3555,6 +3565,21 @@ function compareMailRowsNewestFirst(a: Record<string, unknown>, b: Record<string
   const idB = mailRowIdBigInt(b);
   if (idA === idB) return 0;
   return idB > idA ? 1 : -1;
+}
+
+function mailRowViewed(row: Record<string, unknown>) {
+  const type2 = Number(row.Type2 ?? row.type2);
+  if (Number.isFinite(type2) && (type2 & 0x02) !== 0) return true;
+  const truthyKeys = ["__viewed", "Viewed", "viewed", "IsRead", "isRead", "Read", "read", "Opened", "opened"];
+  if (truthyKeys.some((key) => {
+    const value = row[key];
+    return value === true || value === "true" || Number(value) === 1;
+  })) return true;
+  const timeKeys = ["ReadTime", "readTime", "ViewTime", "viewTime", "OpenTime", "openTime"];
+  if (timeKeys.some((key) => Number(row[key]) > 0 || (typeof row[key] === "string" && row[key] !== "" && row[key] !== "0" && row[key] !== "暂无数据"))) return true;
+  const statusText = String(row.Status ?? row.status ?? row.State ?? row.state ?? row.ViewStatus ?? row.viewStatus ?? "");
+  if (/未查看|未读|unread|not\s+(?:viewed|read|opened)/i.test(statusText)) return false;
+  return /已查看|已读|查看|read|viewed|opened/i.test(statusText);
 }
 
 function mailRowClaimed(row: Record<string, unknown>) {
@@ -3706,7 +3731,8 @@ function MailEditor({ canUploadItemTable, global, initialMail, items, onBack, on
 
   const selectedTemplate = templates.find((template) => template.id === templateId);
   const selectedRewardTemplate = rewardTemplates.find((template) => template.id === rewardTemplateId);
-  const selectedTemplateContents = selectedTemplate?.contents;
+  const mailTemplateLocked = templateId !== "custom" && Boolean(selectedTemplate);
+  const rewardTemplateLocked = rewardMode === "reward" && rewardTemplateId !== "custom" && Boolean(selectedRewardTemplate);
 
   React.useEffect(() => {
     if (templateId !== "custom" && selectedTemplate) {
@@ -3723,16 +3749,19 @@ function MailEditor({ canUploadItemTable, global, initialMail, items, onBack, on
   }, [rewardTemplateId, selectedRewardTemplate]);
 
   const submit = async () => {
+    const effectiveMailContent = mailTemplateLocked && selectedTemplate ? templatePrimaryContent(selectedTemplate) : { title, body };
+    const effectiveMailContents = mailTemplateLocked && selectedTemplate ? normalizeLanguageContents(selectedTemplate.contents, { title: selectedTemplate.title, body: selectedTemplate.body }) : undefined;
+    const effectiveRewards = rewardTemplateLocked && selectedRewardTemplate ? selectedRewardTemplate.items : rewards;
     const targets = isGlobalMail ? [] : toNumberArray(targetIds);
     if (!isGlobalMail && !targets.length) {
       setError("请输入用户 ID");
       return;
     }
-    if (!title.trim()) {
+    if (!effectiveMailContent.title.trim()) {
       setError("请输入邮件标题");
       return;
     }
-    if (!body.trim()) {
+    if (!effectiveMailContent.body.trim()) {
       setError("邮件内容为空");
       return;
     }
@@ -3742,7 +3771,7 @@ function MailEditor({ canUploadItemTable, global, initialMail, items, onBack, on
       return;
     }
     const nowSeconds = Math.floor(Date.now() / 1000);
-    const rewardValidation = rewardMode === "reward" ? validateRewardRows(rewards, items) : { ok: true, itemList: [] as number[] };
+    const rewardValidation = rewardMode === "reward" ? validateRewardRows(effectiveRewards, items) : { ok: true, itemList: [] as number[] };
     if (!rewardValidation.ok) {
       setError(rewardValidation.message ?? "请填写有效的奖励道具和数量，或选择无奖励");
       return;
@@ -3829,9 +3858,9 @@ function MailEditor({ canUploadItemTable, global, initialMail, items, onBack, on
         Et: endSeconds,
         St: sendMode === "scheduled" ? startSeconds : 0,
         SenderName: "GM",
-        Titel: title,
-        Body: body,
-        LangLst: selectedTemplateContents ? mailLangListPayload(selectedTemplateContents) : [],
+        Titel: effectiveMailContent.title,
+        Body: effectiveMailContent.body,
+        LangLst: effectiveMailContents ? mailLangListPayload(effectiveMailContents) : [],
         BodyData: [],
         BodyData2: [],
         ItemLst: rewardMode === "reward" ? rewardValidation.itemList : [],
@@ -3904,10 +3933,10 @@ function MailEditor({ canUploadItemTable, global, initialMail, items, onBack, on
           </div>
           <label className="mail-form-row"><span>邮件奖励类型</span><select value={rewardMode} onChange={(event) => setRewardMode(event.target.value === "reward" ? "reward" : "none")}><option value="none">无奖励</option><option value="reward">有奖励</option></select></label>
           {rewardMode === "reward" && <label className="mail-form-row"><span>奖励模板</span><select value={rewardTemplateId} onChange={(event) => setRewardTemplateId(event.target.value)}><option value="custom">自定义</option>{rewardTemplates.map((template) => <option key={template.id} value={template.id}>{template.title}</option>)}</select></label>}
-          {rewardMode === "reward" && <RewardRows canUploadItemTable={canUploadItemTable} items={items} onUploadItemTable={onUploadItemTable} rewards={rewards} setRewards={setRewards} />}
+          {rewardMode === "reward" && <RewardRows canUploadItemTable={canUploadItemTable} disabled={rewardTemplateLocked} items={items} onUploadItemTable={onUploadItemTable} rewards={rewards} setRewards={setRewards} />}
           {!isGlobalMail && <label className="mail-form-row mail-textarea-row"><span>用户 ID</span><textarea value={targetIds} onChange={(event) => setTargetIds(event.target.value)} /></label>}
-          <label className="mail-form-row"><span>邮件标题</span><input value={title} onChange={(event) => setTitle(event.target.value)} /></label>
-          <label className="mail-form-row mail-textarea-row"><span>邮件内容</span><textarea value={body} onChange={(event) => setBody(event.target.value)} /></label>
+          <label className="mail-form-row"><span>邮件标题</span><input readOnly={mailTemplateLocked} title={mailTemplateLocked ? "已选择邮件模板，发送页不可修改邮件内容" : undefined} value={title} onChange={(event) => setTitle(event.target.value)} /></label>
+          <label className="mail-form-row mail-textarea-row"><span>邮件内容</span><textarea readOnly={mailTemplateLocked} title={mailTemplateLocked ? "已选择邮件模板，发送页不可修改邮件内容" : undefined} value={body} onChange={(event) => setBody(event.target.value)} /></label>
           <label className="mail-form-row"><span>发送方式</span><select value={sendMode} onChange={(event) => setSendMode(event.target.value === "scheduled" ? "scheduled" : "now")}><option value="now">立即发送</option><option value="scheduled">定时发送</option></select></label>
           {sendMode === "scheduled" && <label className="mail-form-row"><span>定时发送</span><input type="datetime-local" value={startTime} onChange={(event) => setStartTime(event.target.value)} /><em>北京时间 {formatBeijingTime(startTime)}</em></label>}
           <label className="mail-form-row"><span>过期时间</span><input type="datetime-local" value={endTime} onChange={(event) => setEndTime(event.target.value)} /><em>北京时间 {formatBeijingTime(endTime)}，{formatTimeDistance(endTime)}</em></label>
@@ -3919,7 +3948,7 @@ function MailEditor({ canUploadItemTable, global, initialMail, items, onBack, on
   );
 }
 
-function RewardRows({ canUploadItemTable = true, items, onUploadItemTable, rewards, setRewards }: { canUploadItemTable?: boolean; items: ItemOption[]; onUploadItemTable: (file: File) => Promise<void>; rewards: MailRewardItem[]; setRewards: (items: MailRewardItem[]) => void }) {
+function RewardRows({ canUploadItemTable = true, disabled = false, items, onUploadItemTable, rewards, setRewards }: { canUploadItemTable?: boolean; disabled?: boolean; items: ItemOption[]; onUploadItemTable: (file: File) => Promise<void>; rewards: MailRewardItem[]; setRewards: (items: MailRewardItem[]) => void }) {
   const [uploading, setUploading] = React.useState(false);
   const [uploadError, setUploadError] = React.useState("");
   const [addCount, setAddCount] = React.useState("1");
@@ -3943,6 +3972,7 @@ function RewardRows({ canUploadItemTable = true, items, onUploadItemTable, rewar
     return count;
   };
   const addRewards = () => {
+    if (disabled) return;
     const count = normalizeAddCount();
     setRewards([...rewards, ...Array.from({ length: count }, () => ({ itemId: "", count: "0" }))]);
   };
@@ -3951,12 +3981,12 @@ function RewardRows({ canUploadItemTable = true, items, onUploadItemTable, rewar
       {rewards.map((reward, index) => (
         <div className="mail-form-row mail-reward-row" key={index}>
           <span>{index === 0 ? "奖励内容" : ""}</span>
-          <label>Item<ItemInput items={items} value={reward.itemId} onChange={(value) => updateReward(index, { itemId: value })} /></label>
-          <label>Count<input inputMode="numeric" max={MAX_REWARD_COUNT} min={1} type="number" value={reward.count} onChange={(event) => updateReward(index, { count: event.target.value })} /></label>
-          <button className="mail-delete-reward" onClick={() => deleteReward(index)} title="删除奖励" type="button">删除</button>
+          <label>Item<ItemInput disabled={disabled} items={items} value={reward.itemId} onChange={(value) => updateReward(index, { itemId: value })} /></label>
+          <label>Count<input disabled={disabled} inputMode="numeric" max={MAX_REWARD_COUNT} min={1} type="number" value={reward.count} onChange={(event) => updateReward(index, { count: event.target.value })} /></label>
+          <button className="mail-delete-reward" disabled={disabled} onClick={() => deleteReward(index)} title={disabled ? "已选择奖励模板，发送页不可修改奖励内容" : "删除奖励"} type="button">删除</button>
         </div>
       ))}
-      <div className="mail-form-row mail-add-reward-row"><span /><div className="mail-add-reward-control"><button className="mail-add-reward" onClick={addRewards} type="button">新增</button><input aria-label="新增奖励条目数量" inputMode="numeric" min={1} max={50} type="number" value={addCount} onBlur={normalizeAddCount} onChange={(event) => { setAddCount(event.target.value); setAddCountTip(""); }} /><small>条</small>{addCountTip && <em>{addCountTip}</em>}</div></div>
+      <div className="mail-form-row mail-add-reward-row"><span /><div className="mail-add-reward-control"><button className="mail-add-reward" disabled={disabled} onClick={addRewards} title={disabled ? "已选择奖励模板，发送页不可修改奖励内容" : undefined} type="button">新增</button><input aria-label="新增奖励条目数量" disabled={disabled} inputMode="numeric" min={1} max={50} type="number" value={addCount} onBlur={normalizeAddCount} onChange={(event) => { setAddCount(event.target.value); setAddCountTip(""); }} /><small>条</small>{addCountTip && <em>{addCountTip}</em>}</div></div>
       {canUploadItemTable && <div className="mail-form-row"><span /><label className={`mail-upload-link ${uploading ? "disabled" : ""}`}>{uploading ? "上传中..." : "上传Item表"}<input accept=".xlsx,.xls" disabled={uploading} onChange={(event) => {
         const file = event.target.files?.[0];
         event.currentTarget.value = "";
@@ -3970,7 +4000,7 @@ function RewardRows({ canUploadItemTable = true, items, onUploadItemTable, rewar
   );
 }
 
-function ItemInput({ items, onChange, value }: { items: ItemOption[]; onChange: (value: string) => void; value: string }) {
+function ItemInput({ disabled = false, items, onChange, value }: { disabled?: boolean; items: ItemOption[]; onChange: (value: string) => void; value: string }) {
   const listId = React.useId();
   const normalize = (raw: string) => {
     const match = raw.match(/^\s*(\d+)/);
@@ -3985,17 +4015,21 @@ function ItemInput({ items, onChange, value }: { items: ItemOption[]; onChange: 
   return (
     <div className="mail-item-picker">
       <input
+        disabled={disabled}
         list={listId}
         onBlur={(event) => {
+          if (disabled) return;
           setFocused(false);
           onChange(normalize(event.target.value));
         }}
         onChange={(event) => {
+          if (disabled) return;
           const next = event.target.value;
           setDraft(next);
           onChange(next.trim() ? normalize(next) : "");
         }}
         onFocus={() => {
+          if (disabled) return;
           setFocused(true);
           setDraft(value);
         }}
@@ -4059,7 +4093,7 @@ function MailTemplateEditor({ endpoint = "/local-api/mail-templates", kind = "�
       setError(`模板名称最多${templateNameMaxLength}个字符`);
       return;
     }
-    const cleanedContents = Object.fromEntries(mailLanguages.map((language) => [language, { title: contents[language]?.title.trim() ?? "", body: contents[language]?.body.trim() ?? "" }])) as Record<string, MailTemplateContent>;
+    const cleanedContents = Object.fromEntries(mailLanguages.map((language) => [language, { title: contents[language]?.title ?? "", body: contents[language]?.body ?? "" }])) as Record<string, MailTemplateContent>;
     if (kind === "公告") {
       const overlongTitle = Object.entries(cleanedContents).find(([, content]) => content.title.length > MAX_NOTICE_TITLE_LENGTH);
       if (overlongTitle) {
@@ -4069,7 +4103,7 @@ function MailTemplateEditor({ endpoint = "/local-api/mail-templates", kind = "�
       }
     }
     const englishContent = cleanedContents[defaultMailLanguage] ?? { title: "", body: "" };
-    if (!englishContent.title || !englishContent.body) {
+    if (!englishContent.title.trim() || !englishContent.body.trim()) {
       setError(kind === "公告" ? "至少填写一个英文公告标题和英文公告内容" : "至少填写一个英语标题和英语内容");
       setActiveLanguage(defaultMailLanguage);
       return;
@@ -4078,7 +4112,7 @@ function MailTemplateEditor({ endpoint = "/local-api/mail-templates", kind = "�
     setError("");
     setSaving(true);
     try {
-      const primary = filledContents[defaultMailLanguage].title && filledContents[defaultMailLanguage].body ? filledContents[defaultMailLanguage] : Object.values(filledContents).find((content) => content.title && content.body) ?? { title: "", body: "" };
+      const primary = filledContents[defaultMailLanguage].title.trim() && filledContents[defaultMailLanguage].body.trim() ? filledContents[defaultMailLanguage] : Object.values(filledContents).find((content) => content.title.trim() && content.body.trim()) ?? { title: "", body: "" };
       const response = await fetch(endpoint, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ id: template?.id, name: cleanName, title: primary.title, body: primary.body, contents: filledContents }) });
       const payload = (await response.json().catch(() => ({}))) as { error?: string; template?: MailTemplate };
       if (!response.ok) throw new Error(payload.error || `HTTP ${response.status}`);
@@ -4141,7 +4175,7 @@ function NoticeTemplatePage() {
   }} />;
 }
 
-function GiftSuitePage({ active, canUploadItemTable, postWithToken }: { active: GiftSectionKey; canUploadItemTable: boolean; postWithToken: (endpoint: string, body: unknown) => Promise<ApiPostResponse> }) {
+function GiftSuitePage({ active, canUploadItemTable, postWithToken, session }: { active: GiftSectionKey; canUploadItemTable: boolean; postWithToken: (endpoint: string, body: unknown) => Promise<ApiPostResponse>; session: Session }) {
   const [rows, setRows] = React.useState<Record<string, unknown>[]>([]);
   const [view, setView] = React.useState<"list" | "edit">("list");
   const [items, setItems] = React.useState<ItemOption[]>([]);
@@ -4152,10 +4186,10 @@ function GiftSuitePage({ active, canUploadItemTable, postWithToken }: { active: 
   const importInputRef = React.useRef<HTMLInputElement>(null);
 
   const refreshItems = React.useCallback(async () => {
-    const response = await fetch("/local-api/items");
+    const response = await fetch(`/local-api/items?${itemScopeQuery(session)}`);
     const payload = (await response.json().catch(() => ({}))) as { items?: ItemOption[] };
     setItems(payload.items ?? []);
-  }, []);
+  }, [session.game, session.serverName]);
 
   const refreshGiftList = React.useCallback(async () => {
     const result = await postWithToken("/gmGiftLst", {});
@@ -4176,7 +4210,7 @@ function GiftSuitePage({ active, canUploadItemTable, postWithToken }: { active: 
   const uploadItemTable = async (file: File) => {
     const formData = new FormData();
     formData.append("file", file);
-    const response = await fetch("/local-api/items/upload", { method: "POST", body: formData });
+    const response = await fetch(`/local-api/items/upload?${itemScopeQuery(session)}`, { method: "POST", body: formData });
     const payload = (await response.json().catch(() => ({}))) as { items?: ItemOption[]; error?: string };
     if (!response.ok) throw new Error(payload.error || "上传道具表失败");
     setItems(payload.items ?? []);
@@ -4714,8 +4748,9 @@ function NoticePage({ postWithToken }: { postWithToken: (endpoint: string, body:
       setStatus("公告保存失败：请选择公告模板");
       return;
     }
-    const normalizedContents = fillMissingLanguageContents(form.contents, { title: form.title, body: form.body });
-    const primaryNoticeContent = normalizedContents[defaultMailLanguage].title && normalizedContents[defaultMailLanguage].body ? normalizedContents[defaultMailLanguage] : Object.values(normalizedContents).find((content) => content.title && content.body) ?? { title: "", body: "" };
+    const templateContents = normalizeLanguageContents(selectedTemplate.contents, { title: selectedTemplate.title, body: selectedTemplate.body });
+    const normalizedContents = fillMissingLanguageContents(templateContents, { title: selectedTemplate.title, body: selectedTemplate.body });
+    const primaryNoticeContent = normalizedContents[defaultMailLanguage].title.trim() && normalizedContents[defaultMailLanguage].body.trim() ? normalizedContents[defaultMailLanguage] : Object.values(normalizedContents).find((content) => content.title.trim() && content.body.trim()) ?? { title: "", body: "" };
     const conditionRows = form.conditions ?? [];
     const versionList = toVersionConditionArray(conditionRows);
     const platformList = conditionRows.filter((row) => row.field === "system").flatMap((row) => toPlatformNumberArray(row.value));
@@ -5032,7 +5067,7 @@ function configsToNoticePayload(configs: NoticeConfig[]) {
     const explicitRegBegin = parseDatetimeLocalSeconds(dateToDatetimeLocal(String(config.regBegin ?? "")));
     const explicitRegEnd = parseDatetimeLocalSeconds(dateToDatetimeLocal(String(config.regEnd ?? ""), true));
     const contents = fillMissingLanguageContents(effectiveConfig.contents, { title: effectiveConfig.title, body: effectiveConfig.body });
-    const primary = contents[defaultMailLanguage].title && contents[defaultMailLanguage].body ? contents[defaultMailLanguage] : Object.values(contents).find((content) => content.title || content.body) ?? { title: "", body: "" };
+    const primary = contents[defaultMailLanguage].title.trim() && contents[defaultMailLanguage].body.trim() ? contents[defaultMailLanguage] : Object.values(contents).find((content) => content.title.trim() || content.body.trim()) ?? { title: "", body: "" };
     const langList = noticeLangListPayload(contents);
     payload[`Titel${suffix}`] = primary.title ?? "";
     payload[`Body${suffix}`] = primary.body ?? "";

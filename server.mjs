@@ -70,6 +70,24 @@ function writeJson(file, data) {
   }
 }
 
+function sanitizeScopePart(value) {
+  return String(value || "default").trim().replace(/[\\/:*?"<>|\s]+/g, "_").replace(/^_+|_+$/g, "") || "default";
+}
+
+function itemScopeFromUrl(requestUrl) {
+  const request = new URL(requestUrl || "/", "http://localhost");
+  const game = sanitizeScopePart(request.searchParams.get("game"));
+  const serverName = sanitizeScopePart(request.searchParams.get("serverName"));
+  return `${game}__${serverName}`;
+}
+
+function itemFilesForScope(scope) {
+  return {
+    items: path.join(dataDir, "items", `${scope}.json`),
+    upload: path.join(dataDir, "uploads", "items", `${scope}.xlsx`),
+  };
+}
+
 function migrateLegacyData(sourceDir, targetDir) {
   if (path.resolve(sourceDir) === path.resolve(targetDir) || !fs.existsSync(sourceDir)) return;
   const copyMissing = (source, target) => {
@@ -336,6 +354,13 @@ function parseItemWorkbook(file) {
   });
 }
 
+function readItemsForScope(scope) {
+  const scopedFiles = itemFilesForScope(scope);
+  const scopedItems = readJson(scopedFiles.items, []);
+  if (Array.isArray(scopedItems) && scopedItems.length) return scopedItems;
+  return readJson(files.items, []);
+}
+
 async function handleLocalApi(req, res, pathname) {
   if (pathname === "/local-api/app-version" && req.method === "GET") {
     sendJson(res, 200, appVersionPayload());
@@ -436,7 +461,7 @@ async function handleLocalApi(req, res, pathname) {
   }
 
   if (pathname === "/local-api/items" && req.method === "GET") {
-    sendJson(res, 200, { items: readJson(files.items, []) });
+    sendJson(res, 200, { items: readItemsForScope(itemScopeFromUrl(req.url)) });
     return true;
   }
 
@@ -453,10 +478,11 @@ async function handleLocalApi(req, res, pathname) {
         sendJson(res, 400, { error: "没有读取到上传文件" });
         return true;
       }
-      fs.mkdirSync(path.dirname(files.itemUpload), { recursive: true });
-      fs.writeFileSync(files.itemUpload, uploaded.data);
-      const items = parseItemWorkbook(files.itemUpload);
-      writeJson(files.items, items);
+      const scopedFiles = itemFilesForScope(itemScopeFromUrl(req.url));
+      fs.mkdirSync(path.dirname(scopedFiles.upload), { recursive: true });
+      fs.writeFileSync(scopedFiles.upload, uploaded.data);
+      const items = parseItemWorkbook(scopedFiles.upload);
+      writeJson(scopedFiles.items, items);
       sendJson(res, 200, { filename: uploaded.filename, items });
     } catch (error) {
       sendJson(res, 400, { error: error instanceof Error ? error.message : "解析道具表失败" });
