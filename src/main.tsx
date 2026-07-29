@@ -1001,7 +1001,7 @@ function chunkArray<T>(items: T[], size: number) {
 
 function mailGroupIds(row?: Record<string, unknown>) {
   if (!row) return [];
-  const ids = [row.Id ?? row.id, ...getArray(row.__childMailIds)]
+  const ids = [row.Id ?? row.ID ?? row.id, ...getArray(row.__childMailIds)]
     .map((value) => String(value ?? "").trim())
     .filter(Boolean);
   return Array.from(new Set(ids));
@@ -3402,8 +3402,18 @@ function MailSuitePage({ active, canUploadItemTable, postWithToken, session, set
 
 function MailListPage({ active, claimLoading, claimRows, localMailRows, mailRows, onClearStatus, onCreate, onDelete, onEdit, onQueryClaims, onRefresh, recordTab, serverOptions, setRecordTab, setUserIdQuery, status, userIdQuery }: { active: MailSectionKey; claimLoading: boolean; claimRows: Record<string, unknown>[]; localMailRows: Record<string, unknown>[]; mailRows: Record<string, unknown>[]; onClearStatus: () => void; onCreate: () => void; onDelete: (id: string) => Promise<void>; onEdit: (row: Record<string, unknown>) => void | Promise<void>; onQueryClaims: () => void; onRefresh: () => void; recordTab: "mail" | "claim"; serverOptions: ServerOption[]; setRecordTab: (tab: "mail" | "claim") => void; setUserIdQuery: (value: string) => void; status: string; userIdQuery: string }) {
   const global = active === "mailGlobal";
-  const groupedMailIds = new Set(localMailRows.flatMap((row) => mailGroupIds(row)));
-  const mergedRows = [...localMailRows, ...mailRows.filter((row) => !groupedMailIds.has(String(row.Id ?? row.id ?? "")))];
+  const serverRowsById = new Map<string, Record<string, unknown>>();
+  mailRows.forEach((row) => {
+    mailGroupIds(row).forEach((mailId) => serverRowsById.set(mailId, row));
+  });
+  const enrichedLocalRows = localMailRows.map((row) => {
+    const serverRow = mailGroupIds(row)
+      .map((mailId) => serverRowsById.get(mailId))
+      .find((matchedRow): matchedRow is Record<string, unknown> => Boolean(matchedRow && mailRowClaimStateKnown(matchedRow)));
+    return serverRow ? { ...row, ...serverRow, Id: row.Id ?? row.ID ?? row.id } : row;
+  });
+  const groupedMailIds = new Set(enrichedLocalRows.flatMap((row) => mailGroupIds(row)));
+  const mergedRows = [...enrichedLocalRows, ...mailRows.filter((row) => !mailGroupIds(row).some((mailId) => groupedMailIds.has(mailId)))];
   const rows = mergedRows.filter((row) => {
     const targetIds = getArray(row.TargetID);
     const typ = Number(row.Typ);
@@ -3428,13 +3438,12 @@ function MailListPage({ active, claimLoading, claimRows, localMailRows, mailRows
           <PaginatedMailDataTable
             columns={["邮件ID", "邮件名称", "邮件类型", "是否查看", "是否领取", "查看时间", "领取时间", "生效时间", "过期时间"]}
             rows={claimRows.map((row) => {
-              const state = Number(row.Type2 ?? 0);
               return {
                 邮件ID: formatCell(row.ID ?? row.Id),
                 邮件名称: formatCell(row.Titel ?? row.Title ?? row.SenderName),
                 邮件类型: formatCell(row.__claimSource),
-                是否查看: (state & 0x02) !== 0 ? "已查看" : "未查看",
-                是否领取: (state & 0x04) !== 0 ? "已领取" : "未领取",
+                是否查看: mailRowViewed(row) ? "已查看" : "未查看",
+                是否领取: mailRowClaimed(row) ? "已领取" : "未领取",
                 查看时间: formatTimestamp(row.ReadTime ?? row.ViewTime ?? row.OpenTime),
                 领取时间: formatTimestamp(row.GetTime ?? row.ClaimTime ?? row.ReceiveTime),
                 生效时间: Number(row.St) > 0 ? formatTimestamp(row.St) : "立即生效",
@@ -3577,8 +3586,8 @@ function compareMailRowsNewestFirst(a: Record<string, unknown>, b: Record<string
 }
 
 function mailRowViewed(row: Record<string, unknown>) {
-  const type2 = Number(row.Type2 ?? row.type2);
-  if (Number.isFinite(type2) && (type2 & 0x02) !== 0) return true;
+  const state = mailRowStateFlags(row);
+  if (Number.isFinite(state) && (state & 0x02) !== 0) return true;
   const truthyKeys = ["__viewed", "Viewed", "viewed", "IsRead", "isRead", "Read", "read", "Opened", "opened"];
   if (truthyKeys.some((key) => {
     const value = row[key];
@@ -3592,8 +3601,8 @@ function mailRowViewed(row: Record<string, unknown>) {
 }
 
 function mailRowClaimed(row: Record<string, unknown>) {
-  const type2 = Number(row.Type2 ?? row.type2);
-  if (Number.isFinite(type2) && (type2 & 0x04) !== 0) return true;
+  const state = mailRowStateFlags(row);
+  if (Number.isFinite(state) && (state & 0x04) !== 0) return true;
   const truthyKeys = ["__claimed", "Claimed", "claimed", "IsClaim", "isClaim", "IsClaimed", "isClaimed", "IsGet", "isGet", "Got", "got", "Received", "received", "Drawed", "drawed"];
   if (truthyKeys.some((key) => {
     const value = row[key];
@@ -3606,9 +3615,15 @@ function mailRowClaimed(row: Record<string, unknown>) {
   return /已领取|领取|claimed|received|got/i.test(statusText);
 }
 
+function mailRowStateFlags(row: Record<string, unknown>) {
+  const value = row.Type2 ?? row.type2 ?? row.State ?? row.state ?? row.MailState ?? row.mailState;
+  const state = Number(value);
+  return Number.isFinite(state) ? state : Number.NaN;
+}
+
 function mailRowClaimStateKnown(row: Record<string, unknown>) {
   const keys = [
-    "Type2", "type2", "__claimed", "Claimed", "claimed", "IsClaim", "isClaim", "IsClaimed", "isClaimed",
+    "Type2", "type2", "State", "state", "MailState", "mailState", "__claimed", "Claimed", "claimed", "IsClaim", "isClaim", "IsClaimed", "isClaimed",
     "IsGet", "isGet", "Got", "got", "Received", "received", "Drawed", "drawed", "ClaimTime", "claimTime",
     "GetTime", "getTime", "ReceiveTime", "receiveTime", "DrawTime", "drawTime", "GotTime", "gotTime",
     "Status", "status", "State", "state", "ClaimStatus", "claimStatus",
