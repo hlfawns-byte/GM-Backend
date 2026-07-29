@@ -789,6 +789,16 @@ function mailLangListPayload(contents?: Record<string, MailTemplateContent>) {
     }));
 }
 
+function noticeLangListPayload(contents?: Record<string, MailTemplateContent>) {
+  return languageContentList(fillMissingLanguageContents(contents))
+    .filter((language) => language.title.trim() && language.body.trim())
+    .map((language) => ({
+      Language: language.id,
+      Titel: language.title,
+      Body: language.body,
+    }));
+}
+
 async function parseMailTemplateFile(file: File) {
   const workbook = XLSX.read(await file.arrayBuffer(), { type: "array", cellDates: false });
   const sheet = workbook.Sheets[workbook.SheetNames[0]];
@@ -1101,6 +1111,14 @@ function apiBusinessError(result: ApiPostResponse) {
     return humanizeApiError(String(data?.Desc ?? data?.Msg ?? getObject(result.payload)?.result ?? `Result ${resultCode}`));
   }
   return "";
+}
+
+function waitMs(ms: number) {
+  return new Promise((resolve) => window.setTimeout(resolve, ms));
+}
+
+function isTransientMailListError(error: string) {
+  return /HTTP\s*(?:502|503|504)|Bad Gateway|Gateway Timeout|timeout|网络|超时/i.test(error);
 }
 
 function apiPayloadSummary(payload: unknown) {
@@ -2844,11 +2862,18 @@ function MailSuitePage({ active, canUploadItemTable, postWithToken, session, set
   }, [postWithToken]);
 
   const refreshMailList = React.useCallback(async () => {
-    const result = await postWithToken("/gmMailLst", {});
-    const error = apiBusinessError(result);
+    let result = await postWithToken("/gmMailLst", {});
+    let error = apiBusinessError(result);
+    for (const delay of [400, 900]) {
+      if (!error || !isTransientMailListError(error)) break;
+      await waitMs(delay);
+      result = await postWithToken("/gmMailLst", {});
+      error = apiBusinessError(result);
+    }
     if (error) {
-      setStatus(`邮件列表读取失败：${error}`);
-      setMailRows([]);
+      setStatus(isTransientMailListError(error)
+        ? `邮件列表暂时读取失败，已保留当前列表，请稍后重试：${error}`
+        : `邮件列表读取失败：${error}`);
       return;
     }
     const data = getApiData(result.payload);
@@ -2949,7 +2974,9 @@ function MailSuitePage({ active, canUploadItemTable, postWithToken, session, set
 
   React.useEffect(() => {
     if (active === "mailPersonal" || active === "mailGlobal") {
-      void refreshMailList().catch(() => setMailRows([]));
+      void refreshMailList().catch((error) => {
+        setStatus(error instanceof Error ? `邮件列表暂时读取失败，已保留当前列表，请稍后重试：${error.message}` : "邮件列表暂时读取失败，已保留当前列表，请稍后重试");
+      });
     }
   }, [active, refreshMailList]);
 
@@ -4550,6 +4577,20 @@ function noticeDefaultConditionValue(field: string, op = "=") {
   return "";
 }
 
+function noticeRegistrationBounds(rows: ConditionRow[]) {
+  const beginValues = rows
+    .filter((row) => row.field === "regTime" && row.op === ">=" && row.value)
+    .map((row) => parseDatetimeLocalSeconds(dateToDatetimeLocal(row.value)));
+  const endValues = rows
+    .filter((row) => row.field === "regTime" && row.op === "<=" && row.value)
+    .map((row) => parseDatetimeLocalSeconds(dateToDatetimeLocal(row.value, true)));
+  return {
+    begin: beginValues.length ? Math.max(...beginValues) : parseDatetimeLocalSeconds(NOTICE_DEFAULT_REG_BEGIN),
+    end: endValues.length ? Math.min(...endValues) : parseDatetimeLocalSeconds(NOTICE_DEFAULT_REG_END),
+    invalid: beginValues.some((value) => !value) || endValues.some((value) => !value),
+  };
+}
+
 function NoticePage({ postWithToken }: { postWithToken: (endpoint: string, body: unknown) => Promise<ApiPostResponse> }) {
   const [notices, setNotices] = React.useState<NoticeConfig[]>([]);
   const [serverOptions, setServerOptions] = React.useState<ServerOption[]>([]);
@@ -4588,16 +4629,33 @@ function NoticePage({ postWithToken }: { postWithToken: (endpoint: string, body:
       return templatePrimary.title.trim() === primary.title.trim() && templatePrimary.body.trim() === primary.body.trim();
     });
   };
+  const persistNoticeMetadata = async (items: NoticeConfig[]) => {
+    await Promise.all(items.map((item) => fetch("/local-api/notices", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(item),
+    }).catch(() => undefined)));
+  };
 
   const refresh = React.useCallback(async () => {
-    const result = await postWithToken("/gmNoticeLst", {});
+    const [result, localPayload] = await Promise.all([
+      postWithToken("/gmNoticeLst", {}),
+      fetch("/local-api/notices").then((response) => response.json()).catch(() => ({ notices: [] })),
+    ]);
     const error = apiBusinessError(result);
     if (error) {
       setStatus(`公告读取失败：${error}`);
       setNotices([1, 2, 3].map((slot) => ({ slot, title: "", body: "", imagePath: "" })));
       return;
     }
-    setNotices(noticePayloadToConfigs(getApiData(result.payload)));
+    const localNotices = Array.isArray(localPayload.notices) ? localPayload.notices as NoticeConfig[] : [];
+    const localBySlot = new Map(localNotices.map((notice) => [Number(notice.slot), notice]));
+    setNotices(noticePayloadToConfigs(getApiData(result.payload)).map((notice) => {
+      const localNotice = localBySlot.get(Number(notice.slot));
+      const hasNoticeContent = Boolean(notice.title.trim() || notice.body.trim() || Object.values(notice.contents ?? {}).some((content) => content.title.trim() || content.body.trim()));
+      if (!hasNoticeContent || !localNotice?.templateName) return notice;
+      return { ...notice, templateName: localNotice.templateName };
+    }));
   }, [postWithToken]);
 
   React.useEffect(() => {
@@ -4662,10 +4720,7 @@ function NoticePage({ postWithToken }: { postWithToken: (endpoint: string, body:
     const versionList = toVersionConditionArray(conditionRows);
     const platformList = conditionRows.filter((row) => row.field === "system").flatMap((row) => toPlatformNumberArray(row.value));
     const sidValues = serverConditionIds(conditionRows, serverOptions);
-    const regBeginValues = conditionRows.filter((row) => row.field === "regTime" && row.op === ">=" && row.value).map((row) => parseDatetimeLocalSeconds(dateToDatetimeLocal(row.value)));
-    const regEndValues = conditionRows.filter((row) => row.field === "regTime" && row.op === "<=" && row.value).map((row) => parseDatetimeLocalSeconds(dateToDatetimeLocal(row.value, true)));
-    const regBeginSeconds = regBeginValues.length ? Math.max(...regBeginValues) : parseDatetimeLocalSeconds(NOTICE_DEFAULT_REG_BEGIN);
-    const regEndSeconds = regEndValues.length ? Math.min(...regEndValues) : parseDatetimeLocalSeconds(NOTICE_DEFAULT_REG_END);
+    const regBounds = noticeRegistrationBounds(conditionRows);
     if (conditionRows.some((row) => row.field === "system" && row.op !== "=" && row.value.trim())) {
       setStatus("公告保存失败：系统条件只支持等于");
       return;
@@ -4692,11 +4747,11 @@ function NoticePage({ postWithToken }: { postWithToken: (endpoint: string, body:
       setStatus("公告保存失败：没有符合条件的区服");
       return;
     }
-    if (regBeginValues.some((value) => !value) || regEndValues.some((value) => !value)) {
+    if (regBounds.invalid) {
       setStatus("公告保存失败：请选择有效的注册时间区间");
       return;
     }
-    if (regBeginSeconds && regEndSeconds && regEndSeconds <= regBeginSeconds) {
+    if (regBounds.begin && regBounds.end && regBounds.end <= regBounds.begin) {
       setStatus("公告保存失败：注册结束时间必须晚于注册开始时间");
       return;
     }
@@ -4705,8 +4760,8 @@ function NoticePage({ postWithToken }: { postWithToken: (endpoint: string, body:
       imagePath: form.imagePath.trim() || NOTICE_DEFAULT_IMAGE,
       typ: sidValues.length ? 1 : 0,
       sid: sidValues.join(","),
-      regBegin: secondsToDatetimeLocal(regBeginSeconds),
-      regEnd: secondsToDatetimeLocal(regEndSeconds),
+      regBegin: secondsToDatetimeLocal(regBounds.begin),
+      regEnd: secondsToDatetimeLocal(regBounds.end),
       platforms: platformList.length ? platformList.join(",") : "1,2",
       versions: versionList.length ? versionList.join(",") : "",
       conditions: conditionRows,
@@ -4721,6 +4776,7 @@ function NoticePage({ postWithToken }: { postWithToken: (endpoint: string, body:
         setStatus(`公告保存失败：${error}`);
         return;
       }
+      await persistNoticeMetadata(merged);
       setStatus("公告已保存到服务器");
       setEditing(null);
       await refresh();
@@ -4752,6 +4808,7 @@ function NoticePage({ postWithToken }: { postWithToken: (endpoint: string, body:
         setStatus(`公告删除失败：${error}`);
         return;
       }
+      await persistNoticeMetadata(merged);
       setStatus(`公告 ${slot} 已删除`);
       if (Number(editing?.slot) === slot) setEditing(null);
       await refresh();
@@ -4955,6 +5012,7 @@ function configsToNoticePayload(configs: NoticeConfig[]) {
       payload[`Titel${suffix}`] = " ";
       payload[`Body${suffix}`] = " ";
       payload[`LangLst${slot}`] = languageDefinitions.map(({ id }) => ({ Language: id, Titel: " ", Body: " " }));
+      if (slot === 1) payload.LangLst = payload[`LangLst${slot}`];
       payload[`Rs${slot}`] = NOTICE_DEFAULT_IMAGE;
       payload[`Typ${slot}`] = 1;
       payload[`RegtBegin${slot}`] = 1;
@@ -4967,23 +5025,25 @@ function configsToNoticePayload(configs: NoticeConfig[]) {
     const effectiveConfig = {
       ...config,
       imagePath: config.imagePath?.trim() || NOTICE_DEFAULT_IMAGE,
-      regBegin: config.regBegin || NOTICE_DEFAULT_REG_BEGIN,
-      regEnd: config.regEnd || NOTICE_DEFAULT_REG_END,
       platforms: config.platforms || "1,2",
       versions: config.versions || "",
     };
+    const regBounds = noticeRegistrationBounds(Array.isArray(effectiveConfig.conditions) ? effectiveConfig.conditions : noticeConditionsFromFields(effectiveConfig));
+    const explicitRegBegin = parseDatetimeLocalSeconds(dateToDatetimeLocal(String(config.regBegin ?? "")));
+    const explicitRegEnd = parseDatetimeLocalSeconds(dateToDatetimeLocal(String(config.regEnd ?? ""), true));
     const contents = fillMissingLanguageContents(effectiveConfig.contents, { title: effectiveConfig.title, body: effectiveConfig.body });
     const primary = contents[defaultMailLanguage].title && contents[defaultMailLanguage].body ? contents[defaultMailLanguage] : Object.values(contents).find((content) => content.title || content.body) ?? { title: "", body: "" };
-    const langList = mailLangListPayload(contents);
+    const langList = noticeLangListPayload(contents);
     payload[`Titel${suffix}`] = primary.title ?? "";
     payload[`Body${suffix}`] = primary.body ?? "";
     payload[`LangLst${slot}`] = langList;
+    if (slot === 1) payload.LangLst = langList;
     payload[`Rs${slot}`] = effectiveConfig.imagePath;
     const sid = toFlexibleNumberArray(effectiveConfig.sid);
     const isSpecifiedServer = Number(effectiveConfig.typ) === 1 && sid.length > 0;
     payload[`Typ${slot}`] = isSpecifiedServer ? 1 : 0;
-    payload[`RegtBegin${slot}`] = effectiveConfig.regBegin ? parseDatetimeLocalSeconds(effectiveConfig.regBegin) : 0;
-    payload[`RegtEnd${slot}`] = effectiveConfig.regEnd ? parseDatetimeLocalSeconds(effectiveConfig.regEnd) : 0;
+    payload[`RegtBegin${slot}`] = regBounds.begin || explicitRegBegin || parseDatetimeLocalSeconds(NOTICE_DEFAULT_REG_BEGIN);
+    payload[`RegtEnd${slot}`] = regBounds.end || explicitRegEnd || parseDatetimeLocalSeconds(NOTICE_DEFAULT_REG_END);
     payload[`Sid${slot}`] = isSpecifiedServer ? sid : [];
     const platforms = toPlatformNumberArray(effectiveConfig.platforms);
     const versions = toNoticeVersionArray(effectiveConfig.versions);

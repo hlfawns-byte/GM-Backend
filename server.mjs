@@ -477,9 +477,18 @@ async function handleLocalApi(req, res, pathname) {
     const slot = Math.min(3, Math.max(1, Number(body.slot) || 1));
     const next = {
       slot,
+      templateName: String(body.templateName ?? ""),
       title: String(body.title ?? ""),
       body: String(body.body ?? ""),
+      contents: body.contents && typeof body.contents === "object" ? body.contents : undefined,
       imagePath: String(body.imagePath ?? ""),
+      typ: Number(body.typ ?? 0),
+      sid: String(body.sid ?? ""),
+      regBegin: String(body.regBegin ?? ""),
+      regEnd: String(body.regEnd ?? ""),
+      platforms: String(body.platforms ?? ""),
+      versions: String(body.versions ?? ""),
+      conditions: Array.isArray(body.conditions) ? body.conditions : [],
       updatedAt: new Date().toISOString().slice(0, 19).replace("T", " "),
     };
     writeJson(files.notices, [next, ...(Array.isArray(notices) ? notices : []).filter((notice) => Number(notice.slot) !== slot)]);

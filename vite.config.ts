@@ -79,6 +79,7 @@ const gamesFile = path.resolve(`data/${portal}/games.json`);
 const itemsFile = path.resolve(`data/${portal}/items.json`);
 const itemUploadFile = path.resolve(`data/${portal}/uploads/Item.xlsx`);
 const mailTemplatesFile = path.resolve(`data/${portal}/mail-templates.json`);
+const noticeTemplatesFile = path.resolve(`data/${portal}/notice-templates.json`);
 const rewardTemplatesFile = path.resolve(`data/${portal}/reward-templates.json`);
 const scheduledMailsFile = path.resolve(`data/${portal}/scheduled-mails.json`);
 const mailGroupsFile = path.resolve(`data/${portal}/mail-groups.json`);
@@ -585,9 +586,18 @@ function localAccountPlugin() {
           const slot = Math.min(3, Math.max(1, Number(body.slot) || 1));
           const next = {
             slot,
+            templateName: String(body.templateName ?? ""),
             title: String(body.title ?? ""),
             body: String(body.body ?? ""),
+            contents: body.contents && typeof body.contents === "object" ? body.contents : undefined,
             imagePath: String(body.imagePath ?? ""),
+            typ: Number(body.typ ?? 0),
+            sid: String(body.sid ?? ""),
+            regBegin: String(body.regBegin ?? ""),
+            regEnd: String(body.regEnd ?? ""),
+            platforms: String(body.platforms ?? ""),
+            versions: String(body.versions ?? ""),
+            conditions: Array.isArray(body.conditions) ? body.conditions : [],
             updatedAt: new Date().toISOString().slice(0, 19).replace("T", " "),
           };
           writeJsonFile(noticesFile, [next, ...notices.filter((notice) => Number(notice.slot) !== slot)]);
@@ -636,6 +646,56 @@ function localAccountPlugin() {
           const id = decodeURIComponent(mailTemplateMatch[1]);
           const templates = readJsonFile<Record<string, unknown>[]>(mailTemplatesFile, []);
           writeJsonFile(mailTemplatesFile, templates.filter((template) => String(template.id) !== id));
+          sendJson(res, 200, { Result: 0, id });
+          return;
+        }
+
+        if (url === "/local-api/notice-templates" && req.method === "GET") {
+          sendJson(res, 200, { templates: readJsonFile(noticeTemplatesFile, []) });
+          return;
+        }
+
+        if (url === "/local-api/notice-templates" && req.method === "POST") {
+          const body = await readJsonBody(req);
+          const templates = readJsonFile<Record<string, unknown>[]>(noticeTemplatesFile, []);
+          const now = Math.floor(Date.now() / 1000);
+          const id = String(body.id ?? `nt-${Date.now()}`);
+          const rawName = String(body.name ?? "").trim();
+          if (rawName.length > 20) {
+            sendJson(res, 400, { error: "公告模板名称最多20个字符" });
+            return;
+          }
+          const rawContents = body.contents && typeof body.contents === "object" ? body.contents as Record<string, unknown> : {};
+          const overlongTitle = Object.entries(rawContents).find(([, content]) => String((content as { title?: unknown })?.title ?? "").length > 20);
+          if (String(body.title ?? "").length > 20 || overlongTitle) {
+            sendJson(res, 400, { error: overlongTitle ? `${overlongTitle[0]}公告标题最多20个字符` : "公告标题最多20个字符" });
+            return;
+          }
+          const name = (rawName || "未命名模板").slice(0, 20);
+          if (templates.some((template) => String(template.id) !== id && String(template.name ?? "").trim().toLocaleLowerCase() === name.toLocaleLowerCase())) {
+            sendJson(res, 409, { error: "模板名称已存在，请换个名称" });
+            return;
+          }
+          const existing = templates.find((template) => String(template.id) === id);
+          const next = {
+            id,
+            name,
+            title: String(body.title ?? ""),
+            body: String(body.body ?? ""),
+            contents: body.contents && typeof body.contents === "object" ? body.contents : undefined,
+            createdAt: existing?.createdAt ?? now,
+            updatedAt: now,
+          };
+          writeJsonFile(noticeTemplatesFile, [next, ...templates.filter((template) => String(template.id) !== id)]);
+          sendJson(res, 200, { template: next });
+          return;
+        }
+
+        const noticeTemplateMatch = url.match(/^\/local-api\/notice-templates\/([^/]+)$/);
+        if (noticeTemplateMatch && req.method === "DELETE") {
+          const id = decodeURIComponent(noticeTemplateMatch[1]);
+          const templates = readJsonFile<Record<string, unknown>[]>(noticeTemplatesFile, []);
+          writeJsonFile(noticeTemplatesFile, templates.filter((template) => String(template.id) !== id));
           sendJson(res, 200, { Result: 0, id });
           return;
         }
