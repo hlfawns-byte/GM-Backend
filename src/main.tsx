@@ -595,7 +595,16 @@ function enumerateVersionsUpTo(target: number[], includeTarget: boolean) {
   return result;
 }
 
-function toVersionConditionArray(rows: Array<{ field: string; op: string; value: string }>) {
+function expandExactPatchVersion(parts: number[]) {
+  if (parts.length !== 3) return [versionPartsToCode(parts)];
+  const [major, minor, patch] = parts;
+  return [
+    versionPartsToCode(parts),
+    ...Array.from({ length: 11 }, (_, hotfix) => versionPartsToCode([major, minor, patch, hotfix])),
+  ];
+}
+
+function toVersionConditionArray(rows: Array<{ field: string; op: string; value: string }>, options?: { expandExactPatchHotfix?: boolean }) {
   const versionRows = rows.filter((row) => row.field === "version" && row.value.trim());
   if (!versionRows.length) return [];
   let selected: number[] | null = null;
@@ -607,7 +616,9 @@ function toVersionConditionArray(rows: Array<{ field: string; op: string; value:
     if (!partsList.length) return [];
     let rowCodes: number[] = [];
     if (row.op === "=") {
-      rowCodes = partsList.map(versionPartsToCode);
+      rowCodes = options?.expandExactPatchHotfix
+        ? partsList.flatMap(expandExactPatchVersion)
+        : partsList.map(versionPartsToCode);
     } else if (row.op === "<=" || row.op === "<") {
       rowCodes = Array.from(new Set(partsList.flatMap((parts) => enumerateVersionsUpTo(parts, row.op === "<="))));
     } else {
@@ -5015,7 +5026,7 @@ function NoticePage({ postWithToken }: { postWithToken: (endpoint: string, body:
       return;
     }
     const conditionRows = form.conditions ?? [];
-    const versionList = toVersionConditionArray(conditionRows);
+    const versionList = toVersionConditionArray(conditionRows, { expandExactPatchHotfix: true });
     const platformList = conditionRows.filter((row) => row.field === "system").flatMap((row) => toPlatformNumberArray(row.value));
     const sidValues = serverConditionIds(conditionRows, serverOptions);
     const regBounds = noticeRegistrationBounds(conditionRows);
@@ -5029,7 +5040,7 @@ function NoticePage({ postWithToken }: { postWithToken: (endpoint: string, body:
       setStatus(`公告保存失败：${labels[emptyCondition.field] ?? "条件"}未填写`);
       return;
     }
-    if (conditionRows.some((row) => row.field === "version" && row.value.trim() && !toVersionConditionArray([row]).length)) {
+    if (conditionRows.some((row) => row.field === "version" && row.value.trim() && !toVersionConditionArray([row], { expandExactPatchHotfix: true }).length)) {
       setStatus("公告保存失败：版本请填写 x.x、x.x.x 或 x.x.x.x，例如 1.8 或 1.8.0.0");
       return;
     }
