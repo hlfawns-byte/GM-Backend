@@ -65,6 +65,7 @@ type Session = {
   operatorAccount: string;
   game: string;
   serverName: string;
+  serverRegion?: ServerRegion;
   token: string;
   serverUrl: string;
   apiBase: string;
@@ -99,12 +100,15 @@ type GameConfig = {
   serverUrl: string;
   environment: string;
   logo: string;
+  serverRegion?: ServerRegion;
   serverAccount?: string;
   serverPassword?: string;
   iconUrl?: string;
   backgroundUrl?: string;
   id?: number;
 };
+
+type ServerRegion = "domestic" | "overseas";
 
 type ApiField = {
   key: string;
@@ -188,6 +192,14 @@ type RewardTemplate = {
   items: MailRewardItem[];
   createdAt: string;
   updatedAt: string;
+};
+
+type TemplateSyncKind = "mail" | "reward" | "notice";
+
+type TemplateSyncPortal = {
+  key: "test" | "prod";
+  label: string;
+  games: GameConfig[];
 };
 
 type UserLog = {
@@ -310,10 +322,14 @@ const defaultLanguageDefinition = languageDefinitions.find((language) => languag
 const defaultMailLanguage = defaultLanguageDefinition.label;
 
 const portal = import.meta.env.VITE_GM_PORTAL === "prod" ? "prod" : "test";
+const serverRegionOptions: Array<{ value: ServerRegion; label: string; currency: string }> = [
+  { value: "domestic", label: "国服", currency: "元" },
+  { value: "overseas", label: "海外", currency: "美金" },
+];
 const portalGameConfig: GameConfig =
   portal === "prod"
-    ? { name: "包包4", serverName: "正式服", serverUrl: "/gm-api", environment: "Prod", logo: "包" }
-    : { name: "包包4", serverName: "测试服", serverUrl: "/gm-api", environment: "Test", logo: "包" };
+    ? { name: "包包4", serverName: "正式服", serverUrl: "/gm-api", environment: "Prod", logo: "包", serverRegion: "domestic" }
+    : { name: "包包4", serverName: "测试服", serverUrl: "/gm-api", environment: "Test", logo: "包", serverRegion: "domestic" };
 const gameConfigs: GameConfig[] = [portalGameConfig];
 
 const permissionOptions = ["用户查询", "名单管理", "邮件公告", "礼包码", "活动配置", "服务器工具", "日志审计"];
@@ -1190,6 +1206,17 @@ function formatCell(value: unknown) {
   return String(value);
 }
 
+function serverRegionCurrency(region?: ServerRegion) {
+  return serverRegionOptions.find((option) => option.value === region)?.currency ?? "元";
+}
+
+function formatChargeAmount(value: unknown, region?: ServerRegion) {
+  if (value === null || value === undefined || value === "") return value;
+  const amount = Number(value);
+  if (!Number.isFinite(amount)) return value;
+  return `${(amount / 100).toLocaleString("zh-CN", { minimumFractionDigits: 2, maximumFractionDigits: 2 })} ${serverRegionCurrency(region)}`;
+}
+
 function filledRewards(rewards: MailRewardItem[]) {
   return rewards
     .filter((reward) => reward.itemId.trim() || (reward.count.trim() && reward.count.trim() !== "0"))
@@ -1556,7 +1583,7 @@ function App() {
             </section>
           )}
 
-          {active === "dashboard" ? <Dashboard results={results} accounts={accounts} /> : active === "playerInfo" ? <PlayerInfoPage postWithToken={postWithToken} /> : active === "bindUid" ? <BindUidPage postWithToken={postWithToken} /> : active === "gmState" ? <BanControlPage postWithToken={postWithToken} /> : active === "silence" ? <SilencePage operator={session.operatorAccount} /> : active === "userState" ? <UserStatePage postWithToken={postWithToken} /> : active.startsWith("mail") ? <MailSuitePage active={active as MailSectionKey} canUploadItemTable={auth.isAdmin} postWithToken={postWithToken} session={session} setActive={setActive} /> : active.startsWith("gift") ? <GiftSuitePage active={active as GiftSectionKey} canUploadItemTable={auth.isAdmin} postWithToken={postWithToken} session={session} /> : active === "notice" ? <NoticePage postWithToken={postWithToken} /> : active === "noticeTemplate" ? <NoticeTemplatePage /> : active === "sprint" ? <SprintActivityPage postWithToken={postWithToken} /> : active === "serverTime" ? <OpenServerPage postWithToken={postWithToken} /> : active === "orderRefund" ? <OrderRefundPage postWithToken={postWithToken} /> : moduleConfig.status === "pending" ? <UnavailablePanel module={moduleConfig} /> : (
+          {active === "dashboard" ? <Dashboard results={results} accounts={accounts} /> : active === "playerInfo" ? <PlayerInfoPage postWithToken={postWithToken} session={session} /> : active === "bindUid" ? <BindUidPage postWithToken={postWithToken} /> : active === "gmState" ? <BanControlPage postWithToken={postWithToken} /> : active === "silence" ? <SilencePage operator={session.operatorAccount} /> : active === "userState" ? <UserStatePage postWithToken={postWithToken} /> : active.startsWith("mail") ? <MailSuitePage active={active as MailSectionKey} canUploadItemTable={auth.isAdmin} postWithToken={postWithToken} session={session} setActive={setActive} /> : active.startsWith("gift") ? <GiftSuitePage active={active as GiftSectionKey} canUploadItemTable={auth.isAdmin} postWithToken={postWithToken} session={session} /> : active === "notice" ? <NoticePage postWithToken={postWithToken} /> : active === "noticeTemplate" ? <NoticeTemplatePage /> : active === "sprint" ? <SprintActivityPage postWithToken={postWithToken} /> : active === "serverTime" ? <OpenServerPage postWithToken={postWithToken} /> : active === "orderRefund" ? <OrderRefundPage postWithToken={postWithToken} /> : moduleConfig.status === "pending" ? <UnavailablePanel module={moduleConfig} /> : (
             <>
               <section className="filter-panel">
                 <div className="panel-heading">
@@ -1905,6 +1932,7 @@ function GameSelectScreen({ auth, games, onEnter, onLogout, onManageAccounts, on
         operatorAccount: auth.operatorAccount,
         game: game.name,
         serverName: game.serverName,
+        serverRegion: game.serverRegion ?? "domestic",
         token: payload.token,
         serverUrl: game.serverUrl,
         apiBase: apiBaseFromServerUrl(game.serverUrl),
@@ -2017,7 +2045,7 @@ function Dashboard({ results, accounts }: { results: ApiResult[]; accounts: Mana
   );
 }
 
-function PlayerInfoPage({ postWithToken }: { postWithToken: (endpoint: string, body: unknown) => Promise<ApiPostResponse> }) {
+function PlayerInfoPage({ postWithToken, session }: { postWithToken: (endpoint: string, body: unknown) => Promise<ApiPostResponse>; session: Session }) {
   const [filters, setFilters] = React.useState({ userId: "", socialId: "", deviceId: "", orderId: "", nickname: "", accountId: "" });
   const [activeTab, setActiveTab] = React.useState("用户信息");
   const [loading, setLoading] = React.useState(false);
@@ -2222,7 +2250,7 @@ function PlayerInfoPage({ postWithToken }: { postWithToken: (endpoint: string, b
     ["状态", desc || data?.State],
     ["在线状态", typeof onlineValue === "boolean" ? onlineValue ? "在线" : "离线" : onlineValue],
     ["是否付费", dataValue("IsPay", "isPay")],
-    ["总充值金额", extraValue("cntCharge", "CntCharge") ?? data?.PayTotal],
+    ["总充值金额", formatChargeAmount(extraValue("cntCharge", "CntCharge") ?? data?.PayTotal, session.serverRegion)],
     ["总消耗钻石数量", dataValue("CostDiamond", "costDiamond")],
     ["总消耗金币数量", dataValue("CostGold", "costGold")],
     ["最大章节", infoValue("maxChapter")],
@@ -3276,7 +3304,7 @@ function MailSuitePage({ active, canUploadItemTable, postWithToken, session, set
         setEditingMailTemplate(undefined);
         void refreshLocalMailData();
       }} template={editingMailTemplate} />
-      : <MailTemplateList query={templateQuery} setQuery={setTemplateQuery} templates={templates} onCreate={() => { setEditingMailTemplate(undefined); setView("edit"); }} onEdit={(template) => { setEditingMailTemplate(template); setView("edit"); }} onDelete={async (template) => {
+      : <MailTemplateList query={templateQuery} setQuery={setTemplateQuery} syncKind="mail" templates={templates} onCreate={() => { setEditingMailTemplate(undefined); setView("edit"); }} onEdit={(template) => { setEditingMailTemplate(template); setView("edit"); }} onDelete={async (template) => {
         if (!window.confirm(`确认删除邮件模板「${template.name}」？`)) return;
         await fetch(`/local-api/mail-templates/${encodeURIComponent(template.id)}`, { method: "DELETE" });
         await refreshLocalMailData();
@@ -4299,9 +4327,105 @@ function ItemInput({ disabled = false, items, onChange, value }: { disabled?: bo
   );
 }
 
-function MailTemplateList({ onCreate, onDelete, onEdit, query, setQuery, templates }: { onCreate: () => void; onDelete: (template: MailTemplate) => Promise<void>; onEdit: (template: MailTemplate) => void; query: string; setQuery: (value: string) => void; templates: MailTemplate[] }) {
+function TemplateSyncButton({ kind, template }: { kind: TemplateSyncKind; template: MailTemplate | RewardTemplate }) {
+  const [open, setOpen] = React.useState(false);
+  const [targets, setTargets] = React.useState<TemplateSyncPortal[]>([]);
+  const [targetPortal, setTargetPortal] = React.useState<TemplateSyncPortal | null>(null);
+  const [targetGameName, setTargetGameName] = React.useState("");
+  const [loading, setLoading] = React.useState(false);
+  const [syncing, setSyncing] = React.useState(false);
+  const [toast, setToast] = React.useState<{ kind: "success" | "error"; message: string } | null>(null);
+  const rootRef = React.useRef<HTMLDivElement>(null);
+  const templateLabel = "name" in template ? template.name : template.title;
+  const gameNames = React.useMemo(() => Array.from(new Set((targetPortal?.games ?? []).map((game) => game.name).filter(Boolean))), [targetPortal]);
+  const servers = React.useMemo(() => (targetPortal?.games ?? []).filter((game) => game.name === targetGameName), [targetGameName, targetPortal]);
+
+  React.useEffect(() => {
+    const closeOnOutside = (event: MouseEvent) => {
+      if (rootRef.current && !rootRef.current.contains(event.target as Node)) setOpen(false);
+    };
+    document.addEventListener("mousedown", closeOnOutside);
+    return () => document.removeEventListener("mousedown", closeOnOutside);
+  }, []);
+
+  const loadTargets = async () => {
+    if (targets.length) return;
+    setLoading(true);
+    try {
+      const response = await fetch("/local-api/sync-targets");
+      const payload = (await response.json().catch(() => ({}))) as { portals?: TemplateSyncPortal[]; error?: string };
+      if (!response.ok) throw new Error(payload.error || `HTTP ${response.status}`);
+      setTargets(payload.portals ?? []);
+    } catch (error) {
+      setToast({ kind: "error", message: error instanceof Error ? `读取同步目标失败：${error.message}` : "读取同步目标失败" });
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const openMenu = async () => {
+    const nextOpen = !open;
+    setOpen(nextOpen);
+    if (nextOpen) {
+      setTargetPortal(null);
+      setTargetGameName("");
+      await loadTargets();
+    }
+  };
+
+  const syncToServer = async (game: GameConfig) => {
+    if (!targetPortal || syncing) return;
+    setSyncing(true);
+    try {
+      const response = await fetch("/local-api/template-sync", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ kind, template, targetPortal: targetPortal.key, gameName: game.name, serverName: game.serverName }),
+      });
+      const payload = (await response.json().catch(() => ({}))) as { error?: string };
+      if (!response.ok) throw new Error(payload.error || `HTTP ${response.status}`);
+      setOpen(false);
+      setToast({ kind: "success", message: `已同步「${templateLabel}」到${targetPortal.label} / ${game.name} / ${game.serverName}` });
+    } catch (error) {
+      setToast({ kind: "error", message: error instanceof Error ? `同步失败：${error.message}` : "同步失败" });
+    } finally {
+      setSyncing(false);
+    }
+  };
+
+  return (
+    <div className="template-sync" ref={rootRef}>
+      <button className="template-sync-button" disabled={loading || syncing} onClick={() => void openMenu()} type="button">{syncing ? "同步中" : "同步"}</button>
+      {open && (
+        <div className="template-sync-popover">
+          <div className="template-sync-column">
+            <strong>选择后台</strong>
+            {loading ? <span className="template-sync-empty">读取中...</span> : targets.map((item) => (
+              <button className={targetPortal?.key === item.key ? "active" : ""} key={item.key} onClick={() => { setTargetPortal(item); setTargetGameName(""); }} type="button">{item.label}</button>
+            ))}
+          </div>
+          {targetPortal && (
+            <div className="template-sync-column">
+              <strong>选择游戏</strong>
+              {gameNames.length ? gameNames.map((gameName) => <button className={targetGameName === gameName ? "active" : ""} key={gameName} onClick={() => setTargetGameName(gameName)} type="button">{gameName}</button>) : <span className="template-sync-empty">暂无游戏</span>}
+            </div>
+          )}
+          {targetPortal && targetGameName && (
+            <div className="template-sync-column template-sync-servers">
+              <strong>选择区服</strong>
+              {servers.length ? servers.map((game) => <button disabled={syncing} key={`${game.name}-${game.serverName}-${game.id ?? ""}`} onClick={() => void syncToServer(game)} type="button">{game.serverName}</button>) : <span className="template-sync-empty">暂无区服</span>}
+            </div>
+          )}
+        </div>
+      )}
+      {toast && <TransientToast kind={toast.kind} message={toast.message} onClose={() => setToast(null)} />}
+    </div>
+  );
+}
+
+function MailTemplateList({ onCreate, onDelete, onEdit, query, setQuery, syncKind, templates }: { onCreate: () => void; onDelete: (template: MailTemplate) => Promise<void>; onEdit: (template: MailTemplate) => void; query: string; setQuery: (value: string) => void; syncKind: Extract<TemplateSyncKind, "mail" | "notice">; templates: MailTemplate[] }) {
   const rows = templates.filter((template) => !query.trim() || template.name.includes(query.trim()));
-  return <section className="mail-page"><div className="mail-filter-line"><label>模板名称：<input value={query} onChange={(event) => setQuery(event.target.value)} /></label><button type="button"><Search size={14} />Search</button></div><section className="mail-table-card"><button className="mail-primary-button" onClick={onCreate} type="button">新建</button><MailDataTable columns={["ID", "名称", "创建时间", "更新时间", "操作"]} rows={rows.map((template) => ({ ID: template.id, 名称: <span className="mail-ellipsis-cell" title={template.name}>{template.name}</span>, 创建时间: formatTimestampValue(template.createdAt), 更新时间: formatTimestampValue(template.updatedAt), 操作: <div className="mail-action-buttons"><button onClick={() => onEdit(template)} type="button">编辑</button><button onClick={() => void onDelete(template)} type="button">删除</button></div> }))} /></section></section>;
+  return <section className="mail-page"><div className="mail-filter-line"><label>模板名称：<input value={query} onChange={(event) => setQuery(event.target.value)} /></label><button type="button"><Search size={14} />Search</button></div><section className="mail-table-card"><button className="mail-primary-button" onClick={onCreate} type="button">新建</button><MailDataTable columns={["ID", "名称", "创建时间", "更新时间", "操作"]} rows={rows.map((template) => ({ ID: template.id, 名称: <span className="mail-ellipsis-cell" title={template.name}>{template.name}</span>, 创建时间: formatTimestampValue(template.createdAt), 更新时间: formatTimestampValue(template.updatedAt), 操作: <div className="mail-action-buttons"><button onClick={() => onEdit(template)} type="button">编辑</button><button className="mail-danger-button" onClick={() => void onDelete(template)} type="button">删除</button><TemplateSyncButton kind={syncKind} template={template} /></div> }))} /></section></section>;
 }
 
 function MailTemplateEditor({ endpoint = "/local-api/mail-templates", kind = "邮件", onBack, onSaved, template }: { endpoint?: string; kind?: "邮件" | "公告"; onBack: () => void; onSaved: (template?: MailTemplate) => void; template?: MailTemplate }) {
@@ -4423,7 +4547,7 @@ function NoticeTemplatePage() {
   if (view === "edit") {
     return <MailTemplateEditor endpoint="/local-api/notice-templates" kind="公告" onBack={() => setView("list")} onSaved={() => { setView("list"); setEditingTemplate(undefined); void refresh(); }} template={editingTemplate} />;
   }
-  return <MailTemplateList query={query} setQuery={setQuery} templates={templates} onCreate={() => { setEditingTemplate(undefined); setView("edit"); }} onEdit={(template) => { setEditingTemplate(template); setView("edit"); }} onDelete={async (template) => {
+  return <MailTemplateList query={query} setQuery={setQuery} syncKind="notice" templates={templates} onCreate={() => { setEditingTemplate(undefined); setView("edit"); }} onEdit={(template) => { setEditingTemplate(template); setView("edit"); }} onDelete={async (template) => {
     if (!window.confirm(`确认删除公告模板「${template.name}」？`)) return;
     await fetch(`/local-api/notice-templates/${encodeURIComponent(template.id)}`, { method: "DELETE" });
     await refresh();
@@ -4698,7 +4822,7 @@ function GiftRecallPage() {
 }
 
 function RewardTemplateList({ onCreate, onDelete, onEdit, templates }: { onCreate: () => void; onDelete: (template: RewardTemplate) => Promise<void>; onEdit: (template: RewardTemplate) => void; templates: RewardTemplate[] }) {
-  return <section className="mail-page"><section className="mail-table-card"><button className="mail-primary-button" onClick={onCreate} type="button">新建</button><MailDataTable columns={["title", "创建时间", "更新时间", "操作"]} rows={templates.map((template) => ({ title: <span className="mail-ellipsis-cell" title={template.title}>{template.title}</span>, 创建时间: formatTimestampValue(template.createdAt), 更新时间: formatTimestampValue(template.updatedAt), 操作: <div className="mail-action-buttons"><button onClick={() => onEdit(template)} type="button">编辑</button><button onClick={() => void onDelete(template)} type="button">删除</button></div> }))} /></section></section>;
+  return <section className="mail-page"><section className="mail-table-card"><button className="mail-primary-button" onClick={onCreate} type="button">新建</button><MailDataTable columns={["title", "创建时间", "更新时间", "操作"]} rows={templates.map((template) => ({ title: <span className="mail-ellipsis-cell" title={template.title}>{template.title}</span>, 创建时间: formatTimestampValue(template.createdAt), 更新时间: formatTimestampValue(template.updatedAt), 操作: <div className="mail-action-buttons"><button onClick={() => onEdit(template)} type="button">编辑</button><button className="mail-danger-button" onClick={() => void onDelete(template)} type="button">删除</button><TemplateSyncButton kind="reward" template={template} /></div> }))} /></section></section>;
 }
 
 function RewardTemplateEditor({ canUploadItemTable, items, onBack, onSaved, onUploadItemTable, template }: { canUploadItemTable: boolean; items: ItemOption[]; onBack: () => void; onSaved: (template: RewardTemplate) => void; onUploadItemTable: (file: File) => Promise<void>; template?: RewardTemplate }) {
@@ -5664,7 +5788,7 @@ function UserLogPanel({ onClose }: { onClose: () => void }) {
 }
 
 function GamePanel({ games, onAdd, onDelete, onUpdate, onClose }: { games: GameConfig[]; onAdd: (game: GameConfig) => Promise<void>; onDelete: (gameId: number) => Promise<void>; onUpdate: (game: GameConfig) => Promise<void>; onClose: () => void }) {
-  const emptyForm = { name: "包包4", serverName: "", serverUrl: "", environment: portal === "prod" ? "Prod" : "Test", logo: "包", serverAccount: "", serverPassword: "", iconUrl: "", backgroundUrl: "" };
+  const emptyForm: GameConfig = { name: "包包4", serverName: "", serverUrl: "", environment: portal === "prod" ? "Prod" : "Test", logo: "包", serverRegion: "domestic", serverAccount: "", serverPassword: "", iconUrl: "", backgroundUrl: "" };
   const [form, setForm] = React.useState<GameConfig>(emptyForm);
   const [editingId, setEditingId] = React.useState<number | null>(null);
   const [formError, setFormError] = React.useState("");
@@ -5723,6 +5847,9 @@ function GamePanel({ games, onAdd, onDelete, onUpdate, onClose }: { games: GameC
           }}>
             <label>游戏名<input value={form.name} onChange={(event) => setForm({ ...form, name: event.target.value })} placeholder="例如：包包4" /></label>
             <label>区服<input value={form.serverName} onChange={(event) => setForm({ ...form, serverName: event.target.value })} placeholder="例如：测试服、开发服、正式服" /></label>
+            <label>区服类型<select value={form.serverRegion ?? "domestic"} onChange={(event) => setForm({ ...form, serverRegion: event.target.value as ServerRegion })}>
+              {serverRegionOptions.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}
+            </select></label>
             <label>服务端地址<input value={form.serverUrl} onChange={(event) => setForm({ ...form, serverUrl: event.target.value })} placeholder="http://52.77.195.98:9089" /></label>
             <label>服务端账号<input autoComplete="off" value={form.serverAccount ?? ""} onChange={(event) => setForm({ ...form, serverAccount: event.target.value })} placeholder="请输入该区服服务端账号" /></label>
             <label>服务端密码<input autoComplete="new-password" type="password" value={form.serverPassword ?? ""} onChange={(event) => setForm({ ...form, serverPassword: event.target.value })} placeholder="请输入该区服服务端密码" /></label>
@@ -5744,6 +5871,7 @@ function GamePanel({ games, onAdd, onDelete, onUpdate, onClose }: { games: GameC
           <div className="managed-list">{games.length === 0 ? <div className="empty-table"><strong>暂无游戏区服</strong><span>请在左侧新增。</span></div> : games.map((game) => (
             <article className="managed-account" key={game.id ?? `${game.name}/${game.serverName}`}>
               <div><strong>{game.name} / {game.serverName}</strong><span>{game.serverAccount ? "已配置服务端账号" : "使用默认服务端账号"}</span></div>
+              <div className="tag-row"><small>{serverRegionOptions.find((option) => option.value === game.serverRegion)?.label ?? "国服"}</small><small>金额单位：{serverRegionCurrency(game.serverRegion)}</small></div>
               <div className="tag-row"><small>{game.serverUrl}</small><small>{game.iconUrl ? "已上传Icon" : "未上传Icon"}</small>{game.backgroundUrl && <small>已上传背景</small>}</div>
               <div className="managed-actions"><button onClick={() => beginEdit(game)} type="button"><UserCog size={14} />编辑</button><button onClick={async () => {
                 if (!game.id) return;

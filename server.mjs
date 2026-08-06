@@ -33,6 +33,28 @@ const files = {
   notices: path.join(dataDir, "notices.json"),
 };
 
+function dataDirForPortal(targetPortal) {
+  return path.join(defaultDataRoot, targetPortal === "prod" ? "prod" : "test");
+}
+
+function filesForPortal(targetPortal) {
+  const targetDataDir = dataDirForPortal(targetPortal);
+  return {
+    games: path.join(targetDataDir, "games.json"),
+    mailTemplates: path.join(targetDataDir, "mail-templates.json"),
+    noticeTemplates: path.join(targetDataDir, "notice-templates.json"),
+    rewardTemplates: path.join(targetDataDir, "reward-templates.json"),
+  };
+}
+
+function defaultGamesForPortal(targetPortal) {
+  return [
+    targetPortal === "prod"
+      ? { id: 1, name: "\u5305\u53054", serverName: "\u6b63\u5f0f\u670d", serverUrl: "/gm-api", environment: "Prod", logo: "\u5305" }
+      : { id: 1, name: "\u5305\u53054", serverName: "\u6d4b\u8bd5\u670d", serverUrl: "/gm-api", environment: "Test", logo: "\u5305" },
+  ];
+}
+
 const defaultAccounts = [];
 const defaultGames = [
   portal === "prod"
@@ -118,11 +140,35 @@ function writeAccounts(accounts) {
 function readGames() {
   ensureJson(files.games, defaultGames);
   const games = readJson(files.games, []);
-  return Array.isArray(games) ? games : [];
+  return Array.isArray(games) ? games.map((game) => ({
+    ...game,
+    serverRegion: game?.serverRegion === "overseas" ? "overseas" : "domestic",
+  })) : [];
+}
+
+function readGamesForPortal(targetPortal) {
+  const targetFiles = filesForPortal(targetPortal);
+  ensureJson(targetFiles.games, defaultGamesForPortal(targetPortal));
+  const games = readJson(targetFiles.games, []);
+  return Array.isArray(games) ? games.map((game) => ({
+    ...game,
+    serverRegion: game?.serverRegion === "overseas" ? "overseas" : "domestic",
+  })) : [];
 }
 
 function writeGames(games) {
   writeJson(files.games, games);
+}
+
+function templateNameForKind(kind, template) {
+  return String(kind === "reward" ? template?.title ?? "" : template?.name ?? "").trim();
+}
+
+function templateFileForKind(targetFiles, kind) {
+  if (kind === "mail") return targetFiles.mailTemplates;
+  if (kind === "notice") return targetFiles.noticeTemplates;
+  if (kind === "reward") return targetFiles.rewardTemplates;
+  return "";
 }
 
 function sendJson(res, status, data) {
@@ -460,6 +506,56 @@ async function handleLocalApi(req, res, pathname) {
     return true;
   }
 
+  if (pathname === "/local-api/sync-targets" && req.method === "GET") {
+    sendJson(res, 200, {
+      portals: [
+        { key: "test", label: "\u6d4b\u8bd5gm\u540e\u53f0", games: readGamesForPortal("test") },
+        { key: "prod", label: "\u6b63\u5f0fgm\u540e\u53f0", games: readGamesForPortal("prod") },
+      ],
+    });
+    return true;
+  }
+
+  if (pathname === "/local-api/template-sync" && req.method === "POST") {
+    const body = await readJsonBody(req);
+    const kind = String(body.kind ?? "");
+    const targetPortal = body.targetPortal === "prod" ? "prod" : body.targetPortal === "test" ? "test" : "";
+    const template = body.template && typeof body.template === "object" ? body.template : null;
+    const targetFiles = targetPortal ? filesForPortal(targetPortal) : null;
+    const targetFile = targetFiles ? templateFileForKind(targetFiles, kind) : "";
+    const gameName = String(body.gameName ?? "").trim();
+    const serverName = String(body.serverName ?? "").trim();
+    const templateName = templateNameForKind(kind, template);
+    if (!targetPortal || !targetFile || !template || !templateName || !gameName || !serverName) {
+      sendJson(res, 400, { error: "\u540c\u6b65\u53c2\u6570\u4e0d\u5b8c\u6574" });
+      return true;
+    }
+    const targetGames = readGamesForPortal(targetPortal);
+    const targetGame = targetGames.find((game) => String(game.name ?? "") === gameName && String(game.serverName ?? "") === serverName);
+    if (!targetGame) {
+      sendJson(res, 404, { error: "\u76ee\u6807\u6e38\u620f\u533a\u670d\u4e0d\u5b58\u5728" });
+      return true;
+    }
+    const templates = readJson(targetFile, []);
+    const templateList = Array.isArray(templates) ? templates : [];
+    const now = Math.floor(Date.now() / 1000);
+    const sourceId = String(template.id ?? "");
+    const existing = templateList.find((item) => String(item.id) === sourceId)
+      ?? templateList.find((item) => templateNameForKind(kind, item).toLocaleLowerCase() === templateName.toLocaleLowerCase());
+    const next = {
+      ...template,
+      id: existing?.id ? String(existing.id) : sourceId || `${kind}-${Date.now()}`,
+      createdAt: existing?.createdAt ?? template.createdAt ?? now,
+      updatedAt: now,
+      syncedAt: now,
+      syncedFrom: { portal, templateId: sourceId },
+      syncTarget: { portal: targetPortal, gameId: targetGame.id, gameName, serverName },
+    };
+    writeJson(targetFile, [next, ...templateList.filter((item) => String(item.id) !== String(next.id) && templateNameForKind(kind, item).toLocaleLowerCase() !== templateName.toLocaleLowerCase())]);
+    sendJson(res, 200, { Result: 0, template: next });
+    return true;
+  }
+
   if (pathname === "/local-api/items" && req.method === "GET") {
     sendJson(res, 200, { items: readItemsForScope(itemScopeFromUrl(req.url)) });
     return true;
@@ -735,6 +831,7 @@ async function handleLocalApi(req, res, pathname) {
       sendJson(res, 409, { error: "该游戏区服已存在" });
       return true;
     }
+    const serverRegion = body.serverRegion === "overseas" ? "overseas" : "domestic";
     const created = {
       id: Date.now(),
       name,
@@ -742,6 +839,7 @@ async function handleLocalApi(req, res, pathname) {
       serverUrl,
       environment: String(body.environment ?? "Test").trim() || "Test",
       logo: String(body.logo ?? name.slice(0, 1)).trim() || "G",
+      serverRegion,
       serverAccount: String(body.serverAccount ?? "").trim() || undefined,
       serverPassword: String(body.serverPassword ?? "").trim() || undefined,
       iconUrl: String(body.iconUrl ?? "").trim() || undefined,
@@ -798,6 +896,7 @@ async function handleLocalApi(req, res, pathname) {
     }
     const previousKey = `${existing.name}/${existing.serverName}`;
     const nextKey = `${name}/${serverName}`;
+    const serverRegion = body.serverRegion === "overseas" ? "overseas" : "domestic";
     const updated = {
       ...existing,
       name,
@@ -805,6 +904,7 @@ async function handleLocalApi(req, res, pathname) {
       serverUrl,
       environment: String(body.environment ?? existing.environment).trim() || "Test",
       logo: String(body.logo ?? existing.logo ?? name.slice(0, 1)).trim() || "G",
+      serverRegion,
       serverAccount: String(body.serverAccount ?? existing.serverAccount ?? "").trim() || undefined,
       serverPassword: String(body.serverPassword ?? existing.serverPassword ?? "").trim() || undefined,
       iconUrl: String(body.iconUrl ?? existing.iconUrl ?? "").trim() || undefined,
